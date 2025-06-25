@@ -172,95 +172,109 @@ class BitsevskyMapWindow(QMainWindow):
             print(f"Ошибка при создании маски: {e}")
 
     def add_bike_route(self, map_obj, points, names, elevations, descriptions):
-        """Добавляет веломаршрут с плавными кривыми и стрелками направления"""
+        """Добавляет веломаршрут с цветовой интерполяцией по высоте"""
         try:
-            # 1. Подготовка данных
+            # 1. Преобразование данных и проверки
             points = [[float(p[0]), float(p[1])] for p in points]
             elevations = [float(e) for e in elevations]
             
-            # 2. Функция Catmull-Rom сплайна
-            def catmull_rom(p0, p1, p2, p3, num_points=25):
-                """Генерирует точки сплайна между p1 и p2"""
-                spline = []
-                for t in (i/num_points for i in range(num_points+1)):
-                    t2 = t * t
-                    t3 = t2 * t
-                    
-                    lat = 0.5 * ((2 * p1[0]) + 
-                                (-p0[0] + p2[0]) * t + 
-                                (2*p0[0] - 5*p1[0] + 4*p2[0] - p3[0]) * t2 + 
-                                (-p0[0] + 3*p1[0] - 3*p2[0] + p3[0]) * t3)
-                    
-                    lon = 0.5 * ((2 * p1[1]) + 
-                                (-p0[1] + p2[1]) * t + 
-                                (2*p0[1] - 5*p1[1] + 4*p2[1] - p3[1]) * t2 + 
-                                (-p0[1] + 3*p1[1] - 3*p2[1] + p3[1]) * t3)
-                    
-                    spline.append([lat, lon])
-                return spline
+            if len(points) != len(elevations):
+                raise ValueError("Количество точек и высот не совпадает")
 
-            # 3. Генерация плавного маршрута
+            # 2. Функция генерации кривой Безье
+            def bezier_curve(p0, cp1, cp2, p3, num_points=30):
+                return [
+                    [
+                        (1-t)**3*p0[0] + 3*(1-t)**2*t*cp1[0] + 3*(1-t)*t**2*cp2[0] + t**3*p3[0],
+                        (1-t)**3*p0[1] + 3*(1-t)**2*t*cp1[1] + 3*(1-t)*t**2*cp2[1] + t**3*p3[1]
+                    ] 
+                    for t in (i/num_points for i in range(num_points+1))
+                ]
+
+            # 3. Генерация контрольных точек
+            control_points = []
+            for i in range(1, len(points)-1):
+                dx = (points[i+1][0] - points[i-1][0]) * 0.25
+                dy = (points[i+1][1] - points[i-1][1]) * 0.25
+                control_points.append((
+                    [points[i][0] - dx, points[i][1] - dy],
+                    [points[i][0] + dx, points[i][1] + dy]
+                ))
+
+            # 4. Построение плавного маршрута
             smooth_route = []
-            for i in range(len(points)):
-                if i == 0:
-                    # Первый сегмент (дублируем первую точку)
-                    segment = catmull_rom(points[0], points[0], points[1], points[2])
-                elif i == len(points)-1:
-                    # Последний сегмент (дублируем последнюю точку)
-                    segment = catmull_rom(points[i-2], points[i-1], points[i], points[i])
-                else:
-                    # Средние сегменты
-                    p0 = points[max(0, i-2)]
-                    p1 = points[i-1]
-                    p2 = points[i]
-                    p3 = points[min(len(points)-1, i+1)]
-                    segment = catmull_rom(p0, p1, p2, p3)
+            route_elevations = []
+            
+            # Первый сегмент
+            if len(points) > 1:
+                cp1 = [
+                    points[0][0] + (points[1][0]-points[0][0])*0.3,
+                    points[0][1] + (points[1][1]-points[0][1])*0.3
+                ]
+                cp2 = control_points[0][0] if control_points else points[1]
+                segment = bezier_curve(points[0], cp1, cp2, points[1])
+                smooth_route.extend(segment)
                 
-                smooth_route.extend(segment if i == 0 else segment[1:])
+                # Интерполяция высот для первого сегмента
+                for t in (i/len(segment) for i in range(len(segment))):
+                    elev = elevations[0] * (1-t) + elevations[1] * t
+                    route_elevations.append(elev)
 
-            # 4. Создание цветовой карты
+            # Средние сегменты
+            for i in range(1, len(points)-1):
+                cp1 = control_points[i-1][1]
+                cp2 = control_points[i][0] if i < len(control_points) else points[i+1]
+                segment = bezier_curve(points[i], cp1, cp2, points[i+1])[1:]
+                smooth_route.extend(segment)
+                
+                # Интерполяция высот для средних сегментов
+                for t in (i/len(segment) for i in range(len(segment))):
+                    elev = elevations[i] * (1-t) + elevations[i+1] * t
+                    route_elevations.append(elev)
+
+            # 5. Создание цветовой карты
             vmin, vmax = min(elevations), max(elevations)
             if vmin == vmax:
                 vmin, vmax = vmin-10, vmax+10
                 
             colormap = cm.LinearColormap(
-                ['#00aa00', '#ffff00', '#ff0000'],  # Зеленый-Желтый-Красный
+                ['#00aa00', '#ffff00', '#ff0000'],  # Зеленый-желтый-красный
                 vmin=vmin,
                 vmax=vmax
             )
 
-            # 5. Отрисовка маршрута с градиентом
+            # 6. Отрисовка маршрута с цветовой интерполяцией
             for i in range(len(smooth_route)-1):
-                # Интерполяция высоты для текущего сегмента
-                progress = i / len(smooth_route)
-                elev_idx = int(progress * (len(elevations)-1))
-                t = (progress * (len(elevations)-1)) % 1
-                elev = elevations[elev_idx] * (1-t) + elevations[elev_idx+1] * t
-                
                 folium.PolyLine(
                     locations=[smooth_route[i], smooth_route[i+1]],
-                    color=colormap(elev),
-                    weight=8,
-                    opacity=0.3
+                    color=colormap(route_elevations[i]),
+                    weight=6,
+                    opacity=0.9
                 ).add_to(map_obj)
 
-                # 6. Добавление стрелок направления (каждые ~200 метров)
-                if i % 15 == 0 and i < len(smooth_route)-5:
-                    p1 = smooth_route[i]
-                    p2 = smooth_route[i+3]
-                    angle = math.degrees(math.atan2(p2[1]-p1[1], p2[0]-p1[0])) - 90
-                    
-                    folium.RegularPolygonMarker(
-                        location=smooth_route[i+2],
-                        number_of_sides=3,
-                        radius=8,
-                        rotation=angle,
-                        color='#0055ff',
-                        fill_color='#0055ff',
-                        fill_opacity=1
-                    ).add_to(map_obj)
+            # 7. Добавление стрелок направления
+            arrow_style = """
+            <svg height="20" width="20">
+            <path d="M0,5 L10,15 L20,5 L10,10 Z" fill="#000000" stroke="#ffffff" stroke-width="1"/>
+            </svg>
+            """
+            
+            for i in range(10, len(smooth_route)-10, max(1, len(smooth_route)//15)):
+                p1 = smooth_route[i]
+                p2 = smooth_route[i+5]
+                angle = math.degrees(math.atan2(p2[1]-p1[1], p2[0]-p1[0]) + math.pi)
+                
+                folium.Marker(
+                    location=smooth_route[i],
+                    icon=folium.DivIcon(
+                        icon_size=(20,20),
+                        icon_anchor=(10,10),
+                        html=f'<div style="transform: rotate({angle}deg)">{arrow_style}</div>'
+                    ),
+                    z_index_offset=1000
+                ).add_to(map_obj)
 
-            # 7. Добавление маркеров с информацией
+            # 8. Добавление маркеров с информацией
             for i, (point, name, elevation, desc) in enumerate(zip(points, names, elevations, descriptions)):
                 delta = elevations[i] - elevations[i-1] if i > 0 else 0
                 
@@ -279,20 +293,27 @@ class BitsevskyMapWindow(QMainWindow):
                 </div>
                 """
                 
-                icon_color = '#ff0000' if i == 0 else '#00aa00' if i == len(points)-1 else '#0055ff'
-                
                 folium.Marker(
                     location=point,
                     popup=folium.Popup(popup_content, max_width=300),
                     icon=folium.Icon(
-                        color=icon_color,
-                        icon='flag' if i in (0, len(points)-1) else 'circle',
+                        color='red' if i == 0 else 'darkgreen' if i == len(points)-1 else 'blue',
+                        icon='flag' if i in (0, len(points)-1) else 'info-sign',
                         prefix='fa'
                     )
                 ).add_to(map_obj)
 
         except Exception as e:
             print(f"Ошибка при построении маршрута: {str(e)}")
+
+    def _bezier_curve(self, p0, cp1, cp2, p3, num_points=30):
+        """Генерирует точки кривой Безье"""
+        curve = []
+        for t in (i/num_points for i in range(num_points+1)):
+            lat = (1-t)**3*p0[0] + 3*(1-t)**2*t*cp1[0] + 3*(1-t)*t**2*cp2[0] + t**3*p3[0]
+            lon = (1-t)**3*p0[1] + 3*(1-t)**2*t*cp1[1] + 3*(1-t)*t**2*cp2[1] + t**3*p3[1]
+            curve.append([lat, lon])
+        return curve
 
     def _get_marker_icon(self, index, elevation, total_points):
         """Упрощенный метод создания иконки без цветовой карты"""
