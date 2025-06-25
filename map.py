@@ -25,35 +25,24 @@ class BitsevskyMapWindow(QMainWindow):
             forest_polygon = forest.geometry.iloc[0]
             bounds = forest.total_bounds
             
-            # Создаем базовую карту
+            # Создаем базовую карту (только топографическую)
             m = folium.Map(
                 location=[(bounds[1] + bounds[3])/2, (bounds[0] + bounds[2])/2],
                 zoom_start=14,
-                tiles='OpenStreetMap',
+                tiles='https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+                attr='OpenTopoMap',
                 control_scale=True
             )
-            
-            # Добавляем спутниковый слой
-            satelite_layer = folium.TileLayer(
-                tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                attr='Esri',
-                name='Спутник',
-                overlay=False,
-                control=False
-            ).add_to(m)
-            
+
             # Генерация маршрута
             route_points, point_names = self.generate_route(forest_polygon, bounds)
             
             # Добавление элементов на карту
             self.add_gray_mask(m, [
                 [bounds[1], bounds[0]],
-                [bounds[3], bounds[2]]
-            ])
+                [bounds[3], bounds[2]] ]
+            )
             self.add_bike_route(m, route_points, point_names)
-            
-            # Добавляем скрипт для переключения слоев
-            self.add_layer_switcher_script(m)
             
             m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
             map_path = os.path.abspath('bitsevsky_map.html')
@@ -62,59 +51,6 @@ class BitsevskyMapWindow(QMainWindow):
             
         except Exception as e:
             print(f"Ошибка: {e}")
-    
-    def add_layer_switcher_script(self, map_obj):
-        """Добавляет JavaScript для автоматического переключения слоев по масштабу"""
-        script = """
-        // Порог переключения на спутник (при увеличении)
-        var SATELLITE_ZOOM_THRESHOLD = 16;
-        var currentLayer = 'scheme';
-        var sateliteLayer = L.tileLayer(
-            'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-            { attribution: 'Esri', maxZoom: 19 }
-        );
-        
-        function updateMapLayer() {
-            if (!map) return;
-            
-            var zoom = map.getZoom();
-            
-            // Переключаем на спутник при большом масштабе
-            if (zoom >= SATELLITE_ZOOM_THRESHOLD && currentLayer !== 'satelite') {
-                map.eachLayer(function(layer) {
-                    if (layer._url && layer._url.includes('openstreetmap')) {
-                        map.removeLayer(layer);
-                    }
-                });
-                sateliteLayer.addTo(map);
-                currentLayer = 'satelite';
-            } 
-            // Возвращаем схему при уменьшении
-            else if (zoom < SATELLITE_ZOOM_THRESHOLD && currentLayer !== 'scheme') {
-                map.eachLayer(function(layer) {
-                    if (layer._url && layer._url.includes('arcgisonline')) {
-                        map.removeLayer(layer);
-                    }
-                });
-                L.tileLayer(
-                    'https://{s}.tile.openstreetmap.org/{z}/{y}/{x}.png',
-                    { attribution: 'OpenStreetMap', maxZoom: 19 }
-                ).addTo(map);
-                currentLayer = 'scheme';
-            }
-        }
-        
-        // Проверяем при изменении масштаба
-        map.on('zoomend', updateMapLayer);
-        // Инициализация
-        setTimeout(updateMapLayer, 500);
-        """
-        
-        map_obj.get_root().html.add_child(folium.Element(f"""
-        <script>
-            {script}
-        </script>
-        """))
     
     def generate_route(self, polygon, bounds):
         """Генерация маршрута с учётом всех правил"""
