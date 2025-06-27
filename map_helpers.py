@@ -8,8 +8,14 @@ from shapely.geometry import Point
 from typing import Tuple, List, Optional, Dict
 import sys
 
+from datetime import datetime
+
 CACHE_FILE = Path("elevation_cache.json")
 REQUEST_DELAY = 1.0  # Задержка между запросами в секундах
+
+def print_step(prefix : str, message: str):
+    timestamp = datetime.now().strftime('%H:%M:%S')
+    print(f"[{timestamp}] [{prefix}] {message}")
 
 class ElevationCache:
     def __init__(self):
@@ -104,10 +110,6 @@ def generate_nearby_point(reference_point, polygon, max_distance, bounds) -> Opt
             polygon.contains(Point(float(new_lon), float(new_lat)))):
             return (float(new_lat), float(new_lon))
     return None
-
-def calculate_distance(p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
-    """Расчет расстояния между точками в метрах"""
-    return math.sqrt((float(p2[0])-float(p1[0]))**2 + (float(p2[1])-float(p1[1]))**2) * 111320
 
 def get_landscape_description(elevation: float, delta: float) -> str:
     """Описание ландшафта на основе высоты и перепада"""

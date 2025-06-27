@@ -4,46 +4,16 @@ from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 import math
 from datetime import datetime
+from route import *
+from map_helpers import print_step
 
 # Настройки
 GPX_DIR = Path("local_routes")  # Папка с маршрутами
-BITZA_BOUNDS = {
-    'min_lat': 55.57,
-    'max_lat': 55.61,
-    'min_lon': 37.52,
-    'max_lon': 37.58
-}
-MAX_DISTANCE_KM = 3.0  # Максимальное расстояние от границ леса
-
-@dataclass
-class BikeRoute:
-    name: str
-    points: List[Tuple[float, float]]  # (lat, lon)
-    elevations: List[float]
-    descriptions: List[str]
-    source: str = "local"
-
-    def to_map_format(self) -> Dict:
-        return {
-            "points": self.points,
-            "names": [self.name] * len(self.points),
-            "elevations": self.elevations,
-            "descriptions": self.descriptions,
-            "metadata": {
-                "name": self.name,
-                "source": self.source,
-                "url": ""
-            }
-        }
 
 class LocalGPXLoader:
     def __init__(self):
-        self._print_step("Инициализация загрузчика локальных маршрутов")
+        print_step("GPX", "Инициализация загрузчика локальных маршрутов")
         GPX_DIR.mkdir(exist_ok=True)
-
-    def _print_step(self, message: str):
-        timestamp = datetime.now().strftime('%H:%M:%S')
-        print(f"[{timestamp}] [GPX] {message}")
 
     def _extract_metadata(self, gpx) -> Dict:
         """Извлекает метаданные из GPX файла"""
@@ -68,42 +38,14 @@ class LocalGPXLoader:
             
         return metadata
 
-    def _point_in_bounds(self, point: Tuple[float, float]) -> bool:
-        """Проверяет, находится ли точка в границах Битцевского леса или не далее MAX_DISTANCE_KM от них"""
-        lat, lon = point
-        
-        # Проверка нахождения внутри прямоугольника
-        if (BITZA_BOUNDS['min_lat'] <= lat <= BITZA_BOUNDS['max_lat'] and
-            BITZA_BOUNDS['min_lon'] <= lon <= BITZA_BOUNDS['max_lon']):
-            return True
-        
-        # Если точка вне прямоугольника, проверяем расстояние до границ
-        # Вычисляем расстояния до каждой границы в километрах
-        dist_north = max(0, lat - BITZA_BOUNDS['max_lat']) * 111.32
-        dist_south = max(0, BITZA_BOUNDS['min_lat'] - lat) * 111.32
-        dist_east = max(0, lon - BITZA_BOUNDS['max_lon']) * 111.32 * math.cos(math.radians(lat))
-        dist_west = max(0, BITZA_BOUNDS['min_lon'] - lon) * 111.32 * math.cos(math.radians(lat))
-        
-        # Находим минимальное расстояние до границы
-        min_distance = min(dist_north, dist_south, dist_east, dist_west)
-        
-        return min_distance <= MAX_DISTANCE_KM
-        
-    def _is_valid_route(self, points: List[Tuple[float, float]]) -> bool:
-        """Проверяет что маршрут полностью находится в допустимой зоне"""
-        if not points:
-            return False
-            
-        return all(self._point_in_bounds(point) for point in points)
-
-    def load_routes(self) -> List[Dict]:
+    def load_routes(self) -> List[Route]:
         """Загружает все валидные маршруты из локальной папки"""
-        self._print_step(f"Поиск GPX-файлов в {GPX_DIR}")
-        valid_routes = []
+        print_step("GPX", f"Поиск GPX-файлов в {GPX_DIR}")
+        routes = []
         
         for gpx_file in GPX_DIR.glob("*.gpx"):
             try:
-                self._print_step(f"Обработка файла: {gpx_file.name}")
+                print_step("GPX", f"Обработка файла: {gpx_file.name}")
                 with open(gpx_file, 'r', encoding='utf-8') as f:
                     gpx = gpxpy.parse(f)
                     metadata = self._extract_metadata(gpx)
@@ -120,23 +62,19 @@ class LocalGPXLoader:
                                 desc = f"{metadata['name']} - {point.time}" if point.time else metadata['name']
                                 descriptions.append(desc)
                     
-                    if self._is_valid_route(points):
-                        route = BikeRoute(
-                            name=metadata['name'],
-                            points=points,
-                            elevations=elevations,
-                            descriptions=descriptions
-                        )
-                        valid_routes.append(route.to_map_format())
-                        self._print_step(f"Маршрут {metadata['name']} добавлен")
-                    else:
-                        self._print_step(f"Маршрут {metadata['name']} вне зоны Битцевского леса")
+                    
+                    route = Route(
+                        name=metadata['name'],
+                        points=points,
+                        elevations=elevations,
+                        descriptions=descriptions
+                    )
+                    routes.append(route)
                         
             except Exception as e:
-                self._print_step(f"Ошибка обработки {gpx_file.name}: {e}")
+                print_step("GPX", f"Ошибка обработки {gpx_file.name}: {e}")
         
-        self._print_step(f"Найдено {len(valid_routes)} валидных маршрутов")
-        return valid_routes
+        return routes
 
 if __name__ == "__main__":
     loader = LocalGPXLoader()
