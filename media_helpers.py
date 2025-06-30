@@ -2,9 +2,13 @@ import requests
 from urllib.parse import quote, urlencode
 import json
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List
 import atexit
 import re
+
+# Импортируем Pillow для обработки изображений и piexif для EXIF
+from PIL import Image
+import piexif
 
 # Настройки
 CACHE_FILE = Path("landscape_photo_cache.json")
@@ -56,6 +60,67 @@ class PhotoCache:
             self.cache[key] = photo_data
 
 cache = PhotoCache()
+
+def _convert_to_degrees(value: tuple) -> float:
+    """
+    Конвертирует значение GPS из формата EXIF (градусы, минуты, секунды) в десятичные градусы.
+    Пример: ((35, 1), (30, 1), (15, 1)) -> 35.50416666666666
+    """
+    d = float(value[0][0]) / float(value[0][1])
+    m = float(value[1][0]) / float(value[1][1])
+    s = float(value[2][0]) / float(value[2][1])
+    return d + (m / 60.0) + (s / 3600.0)
+
+def get_exif_geolocation(image_path: Path) -> Optional[Tuple[float, float]]:
+    """
+    Извлекает географические координаты (широту, долготу) из EXIF данных фотографии.
+    Возвращает (latitude, longitude) или None, если данные не найдены.
+    """
+    try:
+        img = Image.open(image_path)
+        exif_dict = piexif.load(img.info["exif"])
+
+        if piexif.GPSIFD.GPSLatitude in exif_dict["GPS"] and \
+           piexif.GPSIFD.GPSLongitude in exif_dict["GPS"] and \
+           piexif.GPSIFD.GPSLatitudeRef in exif_dict["GPS"] and \
+           piexif.GPSIFD.GPSLongitudeRef in exif_dict["GPS"]:
+            
+            lat_data = exif_dict["GPS"][piexif.GPSIFD.GPSLatitude]
+            lat_ref = exif_dict["GPS"][piexif.GPSIFD.GPSLatitudeRef].decode('utf-8')
+            lon_data = exif_dict["GPS"][piexif.GPSIFD.GPSLongitude]
+            lon_ref = exif_dict["GPS"][piexif.GPSIFD.GPSLongitudeRef].decode('utf-8')
+
+            latitude = _convert_to_degrees(lat_data)
+            if lat_ref != "N":
+                latitude = -latitude
+
+            longitude = _convert_to_degrees(lon_data)
+            if lon_ref != "E":
+                longitude = -longitude
+            
+            return latitude, longitude
+    except Exception as e:
+        # print(f"Ошибка при чтении EXIF или геоданных из {image_path}: {e}")
+        pass
+    return None
+
+def get_photos_with_geolocation_from_folder(folder_path: Path) -> List[Dict[str, any]]:
+    """
+    Сканирует указанную папку на наличие изображений (jpg, jpeg, png)
+    и извлекает из них географические координаты EXIF.
+    Возвращает список словарей, каждый из которых содержит 'path' и 'coords'.
+    """
+    photos_with_coords = []
+    for ext in ['*.jpg', '*.jpeg', '*.png']:
+        for image_path in folder_path.glob(ext):
+            coords = get_exif_geolocation(image_path)
+            if coords:
+                photos_with_coords.append({
+                    'path': str(image_path),
+                    'coords': coords  # (latitude, longitude)
+                })
+    return photos_with_coords
+
 
 def get_landscape_photo(lat: float, lon: float) -> Tuple[Optional[str], str]:
     """Основная функция для получения фото"""
