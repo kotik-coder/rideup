@@ -1,47 +1,29 @@
-import sys
-import os
-from pathlib import Path
-from PyQt5.QtWidgets import QApplication, QMainWindow
-from PyQt5.QtWebEngineWidgets import QWebEngineView
-from PyQt5.QtCore import QUrl
-
-import osmnx as ox
-import branca.colormap as cm
-import math
-import random
-from media_helpers import *
-from shapely.geometry import Point
-
-from map_helpers import *
-from gpx_loader import LocalGPXLoader  # Импортируем наш загрузчик
-
-import time
-from datetime import datetime
-from PyQt5.QtCore import QTimer
-
-from route_manager import *
-
-from scipy.interpolate import Akima1DInterpolator
+import dash
+from dash import dcc, html, Input, Output, State
+import dash_bootstrap_components as dbc
+import plotly.graph_objects as go
 import numpy as np
+from scipy.interpolate import Akima1DInterpolator
+from gpx_loader import LocalGPXLoader
+from route_manager import RouteManager
+from route import GeoPoint
+# import branca.colormap as cm # Уберите, если не используется для других целей Plotly
+from datetime import datetime
+from map_helpers import print_step
+import json
+from media_helpers import get_photo_html, get_landscape_photo # get_landscape_photo пока не используется напрямую здесь, но пригодится
+from typing import List, Tuple, Dict # ИСПРАВЛЕНО: Добавлен импорт List, Tuple, Dict
+from pathlib import Path # Необходимо для Path(path).name в _add_photo_markers
 
-location_descriptor = 'Битцевский лес, Москва'
-
-class BitsevskyMapWindow(QMainWindow):
-
-    rm : RouteManager
-
+class BitsevskyMapApp:
     def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Битцевский лес - Веломаршрут")
-        self.setGeometry(100, 100, 800, 600)
-        self.browser = QWebEngineView()
-        self.setCentralWidget(self.browser)
+        self.app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
         self._print_header()
-        rm = RouteManager("Битцевский лес, Москва")        
-        # Загружаем в QWebEngineView
-        self.populate_map_with_routes(rm)
-        url = rm.save_map()
-        self.browser.setUrl(url)
+        self.rm = RouteManager("Битцевский лес, Москва")
+        self.selected_route_index = None
+        self.selected_checkpoint_index = None
+        self._setup_layout()
+        self._setup_callbacks()
 
     def _print_header(self):
         """Выводит заголовок с информацией о запуске"""
@@ -50,168 +32,524 @@ class BitsevskyMapWindow(QMainWindow):
         print(f"Время начала: {datetime.now().strftime('%H:%M:%S')}")
         print("="*50 + "\n")
 
-    def populate_map_with_routes(self, rm : RouteManager):
-        """Создание карты с маршрутом"""
-        routes = rm.valid_routes
-        m = rm.map
+    def _create_initial_figure(self):
+        """Создает базовую структуру карты Plotly с центрированием и стилем,
+           используя границы всего леса для начального зума."""
         
-        # Добавление маршрутов на карту только если они есть
-        if routes:
-            print_step("Карта", f"Найдено {len(routes)} маршрутов")
-            for route in routes:
-                self.add_bike_route( m, route)
-        else:
-            print_step("Карта","Маршруты не найдены. Карта будет создана без маршрутов.")                            
+        # Corrected: Unpack bounds in [min_lon, min_lat, max_lon, max_lat] order
+        min_lon_val, min_lat_val, max_lon_val, max_lat_val = self.rm.bounds # Correct unpacking
+        
+        center_lat = (min_lat_val + max_lat_val) / 2 # Use corrected lat values
+        center_lon = (min_lon_val + max_lon_val) / 2 # Use corrected lon values
 
-    def add_bike_route(self, map : folium.Map, r : Route):
-        """Добавляет веломаршрут с цветовой интерполяцией по высоте и оптимизированными чекпоинтами"""
-        try:
-            print_step("Карта","Начало построения маршрута...")
-
-            # Создаем плавный маршрут
-            print_step("Карта","Создание плавного маршрута...")
-            smooth_route, route_elevations = self._create_smooth_route(r)
-            
-            # Добавляем цветовую карту
-            print_step("Карта","Создание цветовой карты высот...")
-            colormap = self._create_colormap(r.elevations)
-            
-            # Отрисовываем маршрут
-            print_step("Карта","Отрисовка маршрута...")
-            self._draw_route(map, smooth_route, route_elevations, colormap)            
-            
-            # Добавляем маркеры с информацией (оптимизированные чекпоинты)
-            print_step("Карта","Добавление информационных маркеров...")
-            r_dict = r.to_map_format()
-            checkpoints = self._add_optimized_info_markers(map, r_dict['points'], 
-                                                  r_dict['names'], 
-                                                  r_dict['elevations'], 
-                                                  r_dict['descriptions'], 
-                                                  colormap, 
-                                                  smooth_route)
-            
-            # Добавляем стрелки направления
-            print_step("Карта","Добавление стрелок направления...")
-            self._add_direction_arrows(map, smooth_route, checkpoints)
-
-            print_step("Карта","Маршрут успешно добавлен на карту")
-
-        except Exception as e:
-            print_step("Карта", f"Ошибка при построении маршрута: {str(e)}")
-            raise
-
-    def _create_colormap(self, elevations):
-        """Создание цветовой карты на основе высот"""
-        vmin, vmax = min(elevations), max(elevations)
-        if vmin == vmax:
-            vmin, vmax = vmin-10, vmax+10
-            
-        return cm.LinearColormap(
-            ['#00aa00', '#ffff00', '#ff0000'],  # Зеленый-желтый-красный
-            vmin=vmin,
-            vmax=vmax
+        # Calculate initial zoom based on the full forest bounds (using corrected lat/lon)
+        initial_zoom = self._calculate_zoom([min_lat_val, max_lat_val], [min_lon_val, max_lon_val])
+        
+        fig = go.Figure(go.Scattermap())
+        fig.update_layout(
+            map_style="open-street-map",
+            map=dict(
+                center=dict(lat=center_lat, lon=center_lon),
+                zoom=initial_zoom
+            ),
+            margin={"r":0,"t":0,"l":0,"b":0},
+            showlegend=False,
+            clickmode='event+select'
         )
-    
-    def _create_smooth_route(self, route : Route):
-        points = route.points
-        elevations = route.elevations
-
-        # Преобразуем точки в массивы numpy
-        lats = np.array([p[0] for p in points])
-        lons = np.array([p[1] for p in points])
-        elevs = np.array(elevations)
-
-        # Параметр t (равномерно распределённый от 0 до 1)
-        t = np.linspace(0, 1, num=len(points))
-
-        # Создаём сплайны для широты, долготы и высоты
-        spline_lat = Akima1DInterpolator(t, lats)
-        spline_lon = Akima1DInterpolator(t, lons)
-        spline_elev = Akima1DInterpolator(t, elevs)
-
-        # Генерируем сглаженные точки (100 точек на маршрут)
-        t_smooth = np.linspace(0, 1, num=100)
-        smooth_lats = spline_lat(t_smooth)
-        smooth_lons = spline_lon(t_smooth)
-        smooth_elevs = spline_elev(t_smooth)
-
-        # Объединяем в список кортежей (lat, lon)
-        smooth_route = list(zip(smooth_lats, smooth_lons))
-        route_elevations = smooth_elevs.tolist()
-
-        return smooth_route, route_elevations
-
-    def _draw_route(self, map_obj, smooth_route, route_elevations, colormap):
-        # 6. Отрисовка маршрута с цветовой интерполяцией
-        for i in range(len(smooth_route)-1):
-            folium.PolyLine(
-                locations=[smooth_route[i], smooth_route[i+1]],
-                color=colormap(route_elevations[i]),
-                weight=6,
-                opacity=0.9
-            ).add_to(map_obj)
-
-    def _add_direction_arrows(self, map_obj, smooth_route, checkpoints):
-        """Добавляет стрелки направления между всеми парами чекпоинтов"""
-        print_step("Карта", f"Добавление стрелок направления для маршрута из {len(smooth_route)} точек")
-
-        # Сохраняем оригинальный стиль стрелки
-        arrow_style = """
-        <svg height="20" width="20">
-        <path d="M0,5 L10,15 L20,5 L10,10 Z" fill="#000000" stroke="#ffffff" stroke-width="1"/>
-        </svg>
-        """
-
-        # 1. Находим точные позиции чекпоинтов на сглаженном маршруте
-        checkpoint_positions = []
-        for checkpoint in checkpoints:
-            closest_idx = min(
-                range(len(smooth_route)),
-                key=lambda i: checkpoint.distance_to(GeoPoint(*smooth_route[i]))
-            )
-            checkpoint_positions.append(closest_idx)
         
-        # Сортируем позиции по порядку следования
-        checkpoint_positions.sort()
+        self._add_forest_boundary_and_name_to_figure(fig) #
+        
+        return fig
 
-        # 2. Добавляем ровно по одной стрелке между каждой парой чекпоинтов
-        arrows_added = 0
-        for i in range(len(checkpoint_positions)-1):
-            start_idx = checkpoint_positions[i]
-            end_idx = checkpoint_positions[i+1]
+
+    def _setup_layout(self):
+        self.app.layout = dbc.Container([
+            dbc.Row([
+                dbc.Col(html.H1("Битцевский лес - Веломаршрут", className="text-center my-4"))
+            ]),
+            dbc.Row([
+                dbc.Col(dcc.Graph(
+                    id='map-graph',
+                    style={'height': 'calc(100vh - 100px)', 'width': '100%'},
+                    figure=self._create_initial_figure()
+                ), width=8, style={'padding': '0'}),
+                dbc.Col([
+                    dbc.Card([
+                        dbc.CardHeader("Выбор маршрута", className="font-weight-bold"),
+                        dbc.CardBody([
+                            dcc.Dropdown(
+                                id='route-selector',
+                                options=[],
+                                placeholder="Выберите маршрут"
+                            )
+                        ])
+                    ], className="mb-3"),
+                    dbc.Card([
+                        dbc.CardHeader("Информация о маршруте", className="font-weight-bold"),
+                        dbc.CardBody([
+                            html.Div(id='route-general-info'),
+                            dcc.Graph(id='elevation-profile', style={'height': '250px'})
+                        ])
+                    ], className="mb-3"),
+                    dbc.Card([
+                        dbc.CardHeader("Информация о чекпоинте", className="font-weight-bold"),
+                        dbc.CardBody(id='checkpoint-info')
+                    ])
+                ], width=4, style={'padding': '0 15px'})
+            ], style={'margin': '0'}),
+            dcc.Store(id='route-data-store'),
+            dcc.Store(id='selected-route-index'),
+            dcc.Store(id='selected-checkpoint-index'),
+            html.Div(id='initial-load-trigger', style={'display': 'none'})
+        ], fluid=True, style={'padding': '0'})
+
+    def _setup_callbacks(self):
+        @self.app.callback(
+            Output('route-data-store', 'data'),
+            Output('route-selector', 'options'),
+            Input('initial-load-trigger', 'children')
+        )
+        def load_initial_route_data(_):
+            """Loads route data and populates route selector options on initial app load."""
+            print_step("Callback", "Загружаю начальные данные маршрутов...")
+            route_data = []
+            options = []
+            if self.rm.valid_routes:
+                for i, route in enumerate(self.rm.valid_routes):
+                    route_dict = self._process_route(route)
+                    route_data.append(route_dict)
+                    options.append({'label': route.name, 'value': i})
             
-            # Вычисляем середину между чекпоинтами
-            mid_idx = (start_idx + end_idx) // 2
+            return json.dumps(route_data), options
+
+        @self.app.callback(
+            Output('selected-route-index', 'data'),
+            Output('selected-checkpoint-index', 'data'),
+            Input('map-graph', 'clickData'),
+            Input('route-selector', 'value'),
+            State('route-data-store', 'data'),
+            State('selected-route-index', 'data')
+        )
+        def update_selection(click_data, dropdown_value, route_data_json, current_route_index):
+            """Handles selection of routes and checkpoints from either the map or dropdown."""
+            triggered_id = dash.callback_context.triggered[0]['prop_id'].split('.')[0]
             
-            # Проверяем, чтобы не выйти за границы маршрута
-            if mid_idx >= len(smooth_route)-5:
-                continue
+            if triggered_id == 'route-selector':
+                return dropdown_value, None
+            
+            if triggered_id == 'map-graph' and click_data:
+                point_data = click_data['points'][0]
                 
-            # Вычисляем направление движения
-            p1 = smooth_route[mid_idx]
-            p2 = smooth_route[mid_idx+5]
-            angle = math.degrees(math.atan2(p2[1]-p1[1], p2[0]-p1[0]) + math.pi)
+                if 'customdata' in point_data and point_data['customdata'] is not None:
+                    return current_route_index, point_data['customdata']
+                
+                clicked_lat = point_data['lat']
+                clicked_lon = point_data['lon']
+                if not route_data_json: return dash.no_update, dash.no_update
+                route_data = json.loads(route_data_json)
+                
+                min_distance = float('inf')
+                closest_route_index = None
+                
+                for i, route_dict in enumerate(route_data):
+                    for p in route_dict['smooth_points']:
+                        dist = GeoPoint(clicked_lat, clicked_lon).distance_to(GeoPoint(p[0], p[1]))
+                        if dist < min_distance:
+                            min_distance = dist
+                            closest_route_index = i
+                
+                if closest_route_index is not None and min_distance < 100:
+                    return closest_route_index, None
 
-            # Добавляем стрелку
-            folium.Marker(
-                location=smooth_route[mid_idx],
-                icon=folium.DivIcon(
-                    icon_size=(20,20),
-                    icon_anchor=(10,10),
-                    html=f'<div style="transform: rotate({angle}deg)">{arrow_style}</div>'
-                ),
-                z_index_offset=1000
-            ).add_to(map_obj)
-            arrows_added += 1
+            return dash.no_update, dash.no_update
 
-        print_step("Карта", f"Добавлено {arrows_added} стрелок между {len(checkpoint_positions)} чекпоинтами")
+        @self.app.callback(
+            Output('map-graph', 'figure'),
+            Input('selected-route-index', 'data'),
+            Input('selected-checkpoint-index', 'data'),
+            State('route-data-store', 'data'),
+            State('map-graph', 'figure')
+        )
+        def update_map_figure(route_index, checkpoint_index, route_data_json, current_figure):
+            """Draws all routes and correctly zooms to the selected one."""
+            fig = go.Figure(current_figure) 
 
-    def _add_optimized_info_markers(self, map_obj, points, names, elevations, descriptions, colormap, smooth_route):
-        """Добавляет чекпоинты, равномерно распределенные по длине сплайна"""
-        if len(smooth_route) < 2:
+            if not route_data_json:
+                return fig
+
+            route_data = json.loads(route_data_json)
+
+            # Clear existing traces to redraw
+            fig.data = []
+
+            # Add a base map layer if it's missing (important for redrawing)
+            if not fig.layout.map.layers:
+                fig.update_layout(map_style="open-street-map")
+
+            # --- Logic for zooming to the selected route or back to forest bounds ---
+            if route_index is not None and route_index < len(route_data):
+                selected_route = route_data[route_index]
+                if selected_route['smooth_points']:
+                    lats = [p[0] for p in selected_route['smooth_points']]
+                    lons = [p[1] for p in selected_route['smooth_points']]
+                    
+                    center_lat = (min(lats) + max(lats)) / 2
+                    center_lon = (min(lons) + max(lons)) / 2
+                    zoom = self._calculate_zoom(lats, lons)
+                    
+                    fig.update_layout(
+                        map_center={'lat': center_lat, 'lon': center_lon},
+                        map_zoom=zoom
+                    )
+            else:
+                # If no route is selected, zoom to the entire forest area
+                # Corrected: Unpack bounds in [min_lon, min_lat, max_lon, max_lat] order
+                min_lon_val, min_lat_val, max_lon_val, max_lat_val = self.rm.bounds # Correct unpacking
+                center_lat = (min_lat_val + max_lat_val) / 2 # Use corrected lat values
+                center_lon = (min_lon_val + max_lon_val) / 2 # Use corrected lon values
+                zoom = self._calculate_zoom([min_lat_val, max_lat_val], [min_lon_val, max_lon_val])
+                fig.update_layout(
+                    map_center={'lat': center_lat, 'lon': center_lon},
+                    map_zoom=zoom
+                )
+                self._add_forest_boundary_and_name_to_figure(fig) #
+
+
+            # Drawing all routes
+            for i, route_dict in enumerate(route_data):
+                # Always add non-selected routes first
+                if i != route_index:
+                    self._add_route_to_figure(fig, route_dict, is_selected=False)
+            
+            # Add the selected route last to ensure it's on top
+            if route_index is not None and route_index < len(route_data):
+                selected_route_dict = route_data[route_index]
+                self._add_route_to_figure(
+                    fig, 
+                    selected_route_dict, 
+                    is_selected=True,
+                    highlight_checkpoint=checkpoint_index
+                )
+                
+            return fig
+
+        @self.app.callback(
+            Output('route-selector', 'value'),
+            Input('selected-route-index', 'data'),
+            prevent_initial_call=True
+        )
+        def sync_route_selector(route_index):
+            return route_index
+
+        @self.app.callback(
+            Output('route-general-info', 'children'),
+            Output('elevation-profile', 'figure'),
+            Output('checkpoint-info', 'children'),
+            Input('selected-route-index', 'data'),
+            Input('selected-checkpoint-index', 'data'),
+            State('route-data-store', 'data')
+        )
+        def update_all_info(selected_route_index, checkpoint_index, route_data_json):
+            if selected_route_index is None or not route_data_json:
+                empty_fig = go.Figure().update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=250)
+                return "Выберите маршрут", empty_fig, "Выберите чекпоинт на карте"
+                
+            route_data = json.loads(route_data_json)
+            if selected_route_index >= len(route_data):
+                return dash.no_update, dash.no_update, dash.no_update
+
+            route = route_data[selected_route_index]
+            
+            total_distance = sum(segment['distance'] for segment in route['segments'])
+            elevation_gain = sum(max(0, segment['elevation_gain']) for segment in route['segments'])
+            elevation_loss = sum(abs(min(0, segment['elevation_loss'])) for segment in route['segments'])
+            
+            info_content = [
+                html.H5(route['name'], className="card-title"),
+                html.P(f"Общая длина: {total_distance:.1f} м"),
+                html.P(f"Набор высоты: {elevation_gain:.1f} м"),
+                html.P(f"Потеря высоты: {elevation_loss:.1f} м"),
+                html.P(f"Чекпоинтов: {len(route['checkpoints'])}")
+            ]
+            
+            elevation_fig = go.Figure()
+            elevation_fig.add_trace(go.Scatter(
+                x=[x['distance'] for x in route['elevation_profile']],
+                y=[x['elevation'] for x in route['elevation_profile']],
+                mode='lines',
+                line=dict(color='green', width=2),
+                fill='tozeroy', # Keep fill tozeroy if you want the area filled down to the axis
+                name='Высота'
+            ))
+
+            # --- MODIFICATION START ---
+            # Calculate min and max elevation from the profile
+            elevations_in_profile = [x['elevation'] for x in route['elevation_profile']]
+            if elevations_in_profile:
+                min_elevation = min(elevations_in_profile)
+                max_elevation = max(elevations_in_profile)
+                
+                # Add a small offset below the minimum elevation
+                y_axis_min = min_elevation - (max_elevation - min_elevation) * 0.1 # 10% offset
+                if y_axis_min < 0: # Ensure y_axis_min doesn't go below 0 if elevations are low
+                    y_axis_min = 0 
+            else:
+                y_axis_min = 0 # Default if no elevations
+            # --- MODIFICATION END ---
+            
+            for i, checkpoint in enumerate(route['checkpoints']):
+                elevation_fig.add_trace(go.Scatter(
+                    x=[checkpoint['distance_from_start']],
+                    y=[checkpoint['elevation']],
+                    mode='markers',
+                    marker=dict(
+                        size=12,
+                        symbol='circle',
+                        color='yellow' if i == checkpoint_index else 'blue',
+                        line=dict(width=2, color='darkblue')
+                    ),
+                    name=checkpoint['name'],
+                    hoverinfo='text',
+                    hovertext=f"{checkpoint['name']} ({checkpoint['elevation']:.1f} м)"
+                ))
+            
+            elevation_fig.update_layout(
+                margin={"r":20,"t":20,"l":40,"b":40},
+                xaxis_title="Расстояние (м)",
+                yaxis_title="Высота (м)",
+                height=250,
+                showlegend=False,
+                yaxis=dict(range=[y_axis_min, max_elevation + (max_elevation - min_elevation) * 0.1]) # Добавляем 10% от диапазона высот как верхний отступ
+            )
+            
+            if checkpoint_index is not None and checkpoint_index < len(route['checkpoints']):
+                checkpoint_info = self._create_checkpoint_card(route['checkpoints'][checkpoint_index])
+            else:
+                checkpoint_info = "Выберите чекпоинт на карте"
+            
+            return info_content, elevation_fig, checkpoint_info
+
+    def _calculate_zoom(self, lats, lons):
+        """
+        --- Исправлено: Более надежный расчет зума ---
+        Вычисляет уровень масштабирования на основе географического охвата.
+        """
+        if not lats or not lons:
+            return 12 
+
+        lat_span = max(lats) - min(lats)
+        lon_span = max(lons) - min(lons)
+        
+        # Обработка случая с одной точкой или нулевым охватом
+        if lat_span == 0 and lon_span == 0:
+            return 15
+
+        # These constants are empirical and might need fine-tuning for your specific map
+        # A rough conversion from span in degrees to a zoom level
+        # A smaller span means a higher zoom level
+        zoom_lat = 9.5 - np.log2(lat_span + 1e-6)
+        zoom_lon = 9.5 - np.log2(lon_span + 1e-6)
+
+        return min(zoom_lat, zoom_lon, 18) # Cap max zoom to 18
+
+    def _add_route_to_figure(self, fig, route_dict, is_selected=False, highlight_checkpoint=None):
+        route_lats = [p[0] for p in route_dict['smooth_points']]
+        route_lons = [p[1] for p in route_dict['smooth_points']]
+        route_elevations = route_dict['elevation_profile'] # Получаем данные о высоте
+
+        if not route_lats or not route_lons or not route_elevations:
             return
 
-        # 1. Рассчитываем кумулятивные расстояния вдоль сплайна
+        # Если маршрут выбран, применяем цветовую схему по высоте
+        if is_selected:
+            # 1. Определяем минимальную, максимальную и стартовую высоту
+            elevations_only = [ep['elevation'] for ep in route_elevations]
+            if not elevations_only:
+                return
+
+            min_elev = min(elevations_only)
+            max_elev = max(elevations_only)
+            start_elev = elevations_only[0] if elevations_only else 0
+
+            # 2. Определяем Plotly colorscale (как числовые диапазоны)
+            if min_elev == max_elev: # Избегаем деления на ноль для плоских маршрутов
+                plotly_colorscale = [[0, 'green'], [1, 'green']]
+                cmin_val = min_elev - 1 if min_elev > 0 else 0
+                cmax_val = max_elev + 1
+            else:
+                norm_start_elev = (start_elev - min_elev) / (max_elev - min_elev)
+                plotly_colorscale = [
+                    [0, 'blue'],               # Минимальная высота - синий
+                    [norm_start_elev, 'green'],# Высота старта - зеленый
+                    [1, 'red']                 # Максимальная высота - красный
+                ]
+                plotly_colorscale.sort(key=lambda x: x[0]) # Убедимся, что точки отсортированы
+                cmin_val = min_elev
+                cmax_val = max_elev
+
+            # Добавляем маршрут с невидимой линией и цветными маркерами
+            fig.add_trace(go.Scattermap(
+                lat=route_lats,
+                lon=route_lons,
+                mode='lines+markers', # Используем линии и маркеры
+                line=dict(width=6, color='rgba(0,0,0,0)'), # Делаем линию полностью прозрачной
+                marker=dict(
+                    size=12, # Увеличиваем размер маркеров, чтобы они сливались и создавали эффект линии
+                    color=elevations_only, # Передаем числовые значения высоты для раскрашивания маркеров
+                    colorscale=plotly_colorscale, # Цветоваядкала для маркеров
+                    cmin=cmin_val,
+                    cmax=cmax_val,
+                    colorbar=dict( # Цветовая шкала для легенды (связана с высотой маркеров)
+                        title="Высота (м)",
+                        x=1.02,
+                        lenmode="fraction",
+                        len=0.75
+                    )
+                ),
+                hoverinfo='text',
+                hovertext=[f"Высота: {ep['elevation']:.1f} м" for ep in route_elevations],
+                showlegend=False,
+                name=f"Маршрут {route_dict['name']} (по высоте)"
+            ))
+
+            if route_dict['checkpoints']:
+                checkpoint_lats = [cp['lat'] for cp in route_dict['checkpoints']]
+                checkpoint_lons = [cp['lon'] for cp in route_dict['checkpoints']]
+                checkpoint_names = [cp['name'] for cp in route_dict['checkpoints']]
+                checkpoint_elevations = [cp['elevation'] for cp in route_dict['checkpoints']]
+                checkpoint_indices = [idx for idx, cp in enumerate(route_dict['checkpoints'])] # Используем 0-базовый индекс для customdata
+
+                fig.add_trace(go.Scattermap(
+                    lat=checkpoint_lats,
+                    lon=checkpoint_lons,
+                    mode='markers',
+                    marker=dict(
+                        size=12,
+                        symbol='circle',
+                        color='blue',
+                        opacity=0.5
+                    ),
+                    text=checkpoint_names, # Для отображения названия при наведении
+                    hoverinfo='text',
+                    hovertext=[f"{name}<br>Высота: {elev:.1f} м" for name, elev in zip(checkpoint_names, checkpoint_elevations)],
+                    customdata=checkpoint_indices, # Для передачи индекса чекпоинта по клику
+                    showlegend=False,
+                    name="Чекпоинты"
+                ))
+
+            # Выделенный чекпоинт (этот блок уже есть в вашем файле)
+            if highlight_checkpoint is not None and highlight_checkpoint < len(route_dict['checkpoints']):
+                checkpoint = route_dict['checkpoints'][highlight_checkpoint]
+                fig.add_trace(go.Scattermap(
+                    lat=[checkpoint['lat']],
+                    lon=[checkpoint['lon']],
+                    mode='markers',
+                    marker=dict(
+                        size=16, # Больше для выделенного
+                        symbol='circle',
+                        color='yellow',
+                        opacity=0.5,
+                    ),
+                    name="Выбранный чекпоинт",
+                    hoverinfo='text',
+                    hovertext=f"{checkpoint['name']}<br>Высота: {checkpoint['elevation']:.1f} м",
+                    showlegend=False
+                ))
+
+        else: # Если маршрут не выбран, отображаем его как обычную серую линию
+            fig.add_trace(go.Scattermap(
+                lat=route_lats,
+                lon=route_lons,
+                mode='lines',
+                line=dict(width=3, color='rgba(100, 100, 100, 0.5)'), # Полупрозрачная серая линия
+                hoverinfo='text',
+                hovertext=f"Маршрут: {route_dict['name']}",
+                showlegend=False,
+                name=route_dict['name']
+            ))
+    
+    def _add_forest_boundary_and_name_to_figure(self, fig):
+        min_lon_val, min_lat_val, max_lon_val, max_lat_val = self.rm.bounds #
+        
+        # Coordinates for the rectangular boundary of the forest
+        lons_boundary = [min_lon_val, max_lon_val, max_lon_val, min_lon_val, min_lon_val] #
+        lats_boundary = [min_lat_val, min_lat_val, max_lat_val, max_lat_val, min_lat_val] #
+
+        fig.add_trace(go.Scattermap( #
+            lat=lats_boundary, #
+            lon=lons_boundary, #
+            mode='lines', #
+            line=dict(width=3, color='blue'), # Distinct blue border
+            hoverinfo='none', #
+            showlegend=False, #
+            name="Границы Битцевского леса" #
+        ))
+
+        # Add annotation for the park's name
+        center_lat = (min_lat_val + max_lat_val) / 2 #
+        center_lon = (min_lon_val + max_lon_val) / 2 #
+        
+        fig.add_annotation( #
+            x=center_lon, #
+            y=center_lat, #
+            text="Битцевский Парк", #
+            showarrow=False, #
+            font=dict(size=20, color="black", family="Arial, sans-serif"), #
+            yanchor="middle", #
+            xanchor="center", #
+            bgcolor="rgba(255, 255, 255, 0.7)", # Slightly transparent background
+            bordercolor="black", #
+            borderwidth=1, #
+            borderpad=4 #
+        )
+
+
+    def _process_route(self, route):
+        smooth_points, smooth_elevations = self._create_smooth_route(route)
+        checkpoints = self._get_checkpoints(route, smooth_points, smooth_elevations)
+        
+        if smooth_points and checkpoints:
+            total_dist_so_far = 0
+            current_smooth_idx = 0
+            for cp in checkpoints:
+                target_smooth_idx = cp['point_index']
+                # Accumulate distance from current_smooth_idx to target_smooth_idx
+                for k in range(current_smooth_idx, min(target_smooth_idx, len(smooth_points) - 1)):
+                    p1 = GeoPoint(*smooth_points[k])
+                    p2 = GeoPoint(*smooth_points[k+1])
+                    total_dist_so_far += p1.distance_to(p2)
+                cp['distance_from_start'] = total_dist_so_far
+                current_smooth_idx = target_smooth_idx
+
+        segments = self._calculate_segments(checkpoints, smooth_elevations)
+        elevation_profile = self._create_elevation_profile(smooth_points, smooth_elevations)
+        
+        return {
+            'name': route.name,
+            'checkpoints': checkpoints,
+            'segments': segments,
+            'elevation_profile': elevation_profile,
+            'raw_points': [(p.lat, p.lon) for p in route.points],
+            'raw_elevations': route.elevations,
+            'smooth_points': smooth_points
+        }
+
+    def _create_elevation_profile(self, points, elevations):
+        profile = []
+        total_distance = 0
+        if not points: return []
+        
+        profile.append({'distance': 0, 'elevation': elevations[0]})
+        for i in range(1, len(points)):
+            p1 = GeoPoint(*points[i-1])
+            p2 = GeoPoint(*points[i])
+            total_distance += p1.distance_to(p2)
+            profile.append({'distance': total_distance, 'elevation': elevations[i]})
+        return profile
+
+    def _get_checkpoints(self, route, smooth_route, route_elevations):
+        if len(smooth_route) < 2: return []
+
         distances = [0.0]
         for i in range(1, len(smooth_route)):
             p1 = GeoPoint(*smooth_route[i-1])
@@ -219,157 +557,121 @@ class BitsevskyMapWindow(QMainWindow):
             distances.append(distances[-1] + p1.distance_to(p2))
         
         total_length = distances[-1]
-
-        # 2. Определяем количество и позиции чекпоинтов
-        min_distance = 50  # Минимальное расстояние между чекпоинтами (метров)
-        target_markers = min(20, max(10, int(total_length / 200)))  # 10-20 чекпоинтов (~каждые 200м)
         
-        # 3. Выбираем точки на сплайне с равными интервалами
-        spline_indices = []
-        step_length = total_length / target_markers
+        target_markers = min(20, max(5, int(total_length / 250))) if total_length > 0 else 2
+
+        marker_indices = {0, len(smooth_route) - 1}
+        if target_markers > 2 and total_length > 0:
+            step_length = total_length / (target_markers - 1)
+            for i in range(1, target_markers - 1):
+                target_dist = i * step_length
+                closest_idx = min(range(len(distances)), key=lambda x: abs(distances[x] - target_dist))
+                marker_indices.add(closest_idx)
         
-        for i in range(target_markers + 1):
-            target_dist = i * step_length
-            closest_idx = min(range(len(distances)), key=lambda x: abs(distances[x] - target_dist))
-            if not spline_indices or closest_idx != spline_indices[-1]:
-                spline_indices.append(closest_idx)
-
-        # 4. Фильтруем точки, слишком близкие друг к другу
-        filtered_indices = [spline_indices[0]]
-        for idx in spline_indices[1:]:
-            if distances[idx] - distances[filtered_indices[-1]] >= min_distance:
-                filtered_indices.append(idx)
-
-        # 5. Находим ближайшие исходные точки для данных о высотах
-        original_indices = []
-        for spline_idx in filtered_indices:
-            closest_original = min(
-                range(len(points)),
-                key=lambda x: GeoPoint(*points[x]).distance_to(GeoPoint(*smooth_route[spline_idx]))
-            )
-            original_indices.append(closest_original)
-
-        # 6. Анализируем перепады высот между чекпоинтами
-        segment_info = []
-        for i in range(1, len(original_indices)):
-            start_idx = original_indices[i-1]
-            end_idx = original_indices[i]
-            
-            # Анализируем участок между чекпоинтами
-            segment_points = points[start_idx:end_idx+1]
-            segment_elev = elevations[start_idx:end_idx+1]
-            segment_length = distances[filtered_indices[i]] - distances[filtered_indices[i-1]]
-            
-            max_elev = max(segment_elev)
-            min_elev = min(segment_elev)
-            start_elev = elevations[start_idx]
-            end_elev = elevations[end_idx]
-
-            # Определяем тип рельефа
-            if (max_elev - min_elev) > 3 and segment_length < 100:  # Овраг
-                terrain_type = "Овраг"
-            elif (max_elev - min_elev) > 10:  # Значительный перепад
-                terrain_type = "Холмистый участок"
-            else:
-                terrain_type = "Ровная местность"
-
-            segment_info.append({
-                'start_idx': start_idx,
-                'end_idx': end_idx,
-                'max_positive': max_elev - start_elev,
-                'max_negative': min_elev - start_elev,
-                'net_change': end_elev - start_elev,
-                'distance': segment_length,
-                'terrain': terrain_type
-            })
-            
+        sorted_indices = sorted(list(marker_indices))
+        
         checkpoints = []
-
-        # 7. Добавляем маркеры на карту
-        for i, idx in enumerate(original_indices):
-            point = GeoPoint(points[idx][0], points[idx][1])
-            checkpoints.append(point)
-            name = names[idx] if idx < len(names) else f"Точка {i+1}"
-            elevation = elevations[idx]
-            desc = descriptions[idx] if idx < len(descriptions) else ""
-
-            # Формируем описание
-            if i == 0:
-                marker_type = "start"
-                delta_info = "Начало маршрута"
-                terrain_desc = ""
-            elif i == len(original_indices)-1:
-                marker_type = "end"
-                delta_info = f"Финиш ({segment_info[-1]['distance']:.0f} м)"
-                terrain_desc = segment_info[-1]['terrain']
-            else:
-                marker_type = "checkpoint"
-                seg = segment_info[i-1]
-                delta_info = self._format_elevation_changes(seg)
-                terrain_desc = seg['terrain']
-                desc = f"{terrain_desc}. {desc}" if desc else terrain_desc
-
-            # Создаем popup
-            popup_content = self._create_marker_popup(
-                name, i+1, len(original_indices),
-                get_photo_html(point.lat, point.lon),
-                desc, colormap(elevation), elevation,
-                delta_info
-            )
-
-            # Добавляем маркер
-            folium.Marker(
-                location=points[idx],
-                popup=folium.Popup(popup_content, max_width=300),
-                icon=self._get_marker_icon(marker_type)
-            ).add_to(map_obj)
-
-        print_step("Карта", 
-            f"Добавлено {len(original_indices)} чекпоинтов (длина маршрута {total_length:.0f} м)")
+        for i, idx in enumerate(sorted_indices):
+            point = smooth_route[idx]
+            
+            closest_original_idx = min(range(len(route.points)), key=lambda x: GeoPoint(route.points[x].lat, route.points[x].lon).distance_to(GeoPoint(*point)))
+            
+            point_name = f"Точка {i+1}"
+            if i == 0: point_name = "Старт"
+            elif i == len(sorted_indices) - 1: point_name = "Финиш"
+            
+            checkpoint = {
+                'point_index': idx,
+                'position': i + 1,
+                'total_positions': len(sorted_indices),
+                'lat': point[0],
+                'lon': point[1],
+                'elevation': route_elevations[idx],
+                'name': point_name,
+                'description': route.descriptions[closest_original_idx] if closest_original_idx < len(route.descriptions) else "",
+                'photo_html': get_photo_html(point[0], point[1])
+            }
+            checkpoints.append(checkpoint)
         
         return checkpoints
 
-    def _format_elevation_changes(self, segment):
-        """Форматирует информацию о перепадах высот"""
-        if segment['max_positive'] > 0 and segment['max_negative'] < 0:
-            return (f"↑+{segment['max_positive']:.1f}м ↓{segment['max_negative']:.1f}м "
-                f"(общий: {segment['net_change']:.1f}м за {segment['distance']:.0f}м)")
-        elif segment['max_positive'] > 0:
-            return f"↑+{segment['max_positive']:.1f}м (общий: {segment['net_change']:.1f}м)"
-        elif segment['max_negative'] < 0:
-            return f"↓{segment['max_negative']:.1f}м (общий: {segment['net_change']:.1f}м)"
-        return f"→ ровно ({segment['net_change']:.1f}м)"
+    def _calculate_segments(self, checkpoints, elevations):
+        segments = []
+        for i in range(1, len(checkpoints)):
+            start_cp = checkpoints[i-1]
+            end_cp = checkpoints[i]
+            
+            start_idx = start_cp['point_index']
+            end_idx = end_cp['point_index']
+            
+            segment_elevations = elevations[start_idx:end_idx+1]
+            if not segment_elevations: continue
 
-    def _create_marker_popup(self, name, point_num, total_points, photo_html, desc, color, elevation, delta_info):
-        """Создает HTML-контент для popup"""
-        return f"""
-        <div style="width:260px;font-family:Arial,sans-serif">
-            <h4 style="margin:0;color:#333;border-bottom:1px solid #eee;padding-bottom:5px">
-                {name} (точка {point_num}/{total_points})
-            </h4>
-            {photo_html}
-            <p style="color:#666;font-size:0.9em;margin:5px 0">{desc}</p>
-            <div style="background:{color};height:4px;margin:5px 0"></div>
-            <p style="margin:3px 0"><b>Высота:</b> {elevation:.1f} м</p>
-            <p style="margin:3px 0">
-                <b>Перепады:</b> <span style="color:{"#ff0000" if '↑' in delta_info else "#00aa00" if '↓' in delta_info else "#666"}">
-                {delta_info}</span>
-            </p>
-        </div>
-        """
+            segments.append({
+                'distance': end_cp.get('distance_from_start', 0) - start_cp.get('distance_from_start', 0),
+                'elevation_gain': max(0, max(segment_elevations) - start_cp['elevation']),
+                'elevation_loss': max(0, start_cp['elevation'] - min(segment_elevations)),
+                'net_elevation': end_cp['elevation'] - start_cp['elevation'],
+                'start_checkpoint': start_cp['position'] - 1,
+                'end_checkpoint': end_cp['position'] - 1
+            })
+        return segments
 
-    def _get_marker_icon(self, marker_type):
-        """Возвращает иконку для маркера"""
-        icons = {
-            "start": folium.Icon(color='red', icon='flag', prefix='fa'),
-            "end": folium.Icon(color='darkgreen', icon='flag', prefix='fa'),
-            "checkpoint": folium.Icon(color='blue', icon='info-sign', prefix='fa')
-        }
-        return icons.get(marker_type, folium.Icon(color='blue', icon='info-sign'))
+    def _create_checkpoint_card(self, checkpoint):
+        return [
+            html.H5(f"{checkpoint['name']} ({checkpoint['position']}/{checkpoint['total_positions']})", 
+                   className="card-title"),
+            html.Iframe(
+                srcDoc=checkpoint['photo_html'],
+                style={'width': '100%', 'height': '220px', 'border': 'none', 'marginBottom': '10px'}
+            ),
+            html.P(f"Координаты: {checkpoint['lat']:.5f}, {checkpoint['lon']:.5f}"),
+            html.P(f"Высота: {checkpoint['elevation']:.1f} м"),
+            html.P(f"Расстояние от старта: {checkpoint.get('distance_from_start', 0):.0f} м"),
+            html.P(checkpoint['description'], className="text-muted")
+        ]
+    
+    def _create_smooth_route(self, route):
+        if len(route.points) < 4:
+            return [(p.lat, p.lon) for p in route.points], route.elevations
+            
+        points = np.array([(p.lat, p.lon) for p in route.points])
+        elevations = np.array(route.elevations)
+        
+        distances = np.zeros(len(points))
+        for i in range(1, len(points)):
+            p1 = GeoPoint(points[i-1][0], points[i-1][1])
+            p2 = GeoPoint(points[i][0], points[i][1])
+            distances[i] = distances[i-1] + p1.distance_to(p2)
+        
+        if distances[-1] == 0:
+            return [(p.lat, p.lon) for p in route.points], route.elevations
+
+        t = distances / distances[-1]
+        
+        num_smooth_points = max(100, int(distances[-1] / 10))
+        t_smooth = np.linspace(0, 1, num_smooth_points)
+        
+        try:
+            spline_lat = Akima1DInterpolator(t, points[:, 0])
+            spline_lon = Akima1DInterpolator(t, points[:, 1])
+            spline_elev = Akima1DInterpolator(t, elevations)
+            
+            smooth_lats = spline_lat(t_smooth)
+            smooth_lons = spline_lon(t_smooth)
+            smooth_elevs = spline_elev(t_smooth)
+            
+            smooth_points = list(zip(smooth_lats, smooth_lons))
+            return smooth_points, smooth_elevs.tolist()
+
+        except Exception as e:
+            print(f"Could not create spline, returning raw points. Error: {e}")
+            return [(p.lat, p.lon) for p in route.points], route.elevations
+
+
+    def run(self):
+        self.app.run(debug=False)
 
 if __name__ == '__main__':
-    # Создание карты с маршрутами
-    app = QApplication(sys.argv)
-    window = BitsevskyMapWindow()
-    window.show()
-    sys.exit(app.exec_())
+    app = BitsevskyMapApp()
+    app.run()

@@ -40,19 +40,23 @@ class Route:
         }
 
     def _point_in_bounds(self, bounds : List[float], point: GeoPoint) -> bool:
-        lat, lon = point
+        # Изменено: Доступ к lat и lon через атрибуты объекта GeoPoint
+        lat = point.lat
+        lon = point.lon
         
-        # Проверка нахождения внутри прямоугольника
-        if (bounds[0] <= lat <= bounds[2] and
-            bounds[1] <= lon <= bounds[3]):
+        # --- Исправлено ---
+        # Правильная проверка границ: широта с границами по широте, долгота с границами по долготе.
+        # bounds = [min_lon, min_lat, max_lon, max_lat]
+        if (bounds[1] <= lat <= bounds[3] and
+            bounds[0] <= lon <= bounds[2]):
             return True
         
         # Если точка вне прямоугольника, проверяем расстояние до границ
         # Вычисляем расстояния до каждой границы в километрах
-        dist_north  = max(0, lat - bounds[2]) * 111.32
-        dist_south  = max(0, bounds[0] - lat) * 111.32
-        dist_east   = max(0, lon - bounds[3]) * 111.32 * math.cos(math.radians(lat))
-        dist_west   = max(0, bounds[1] - lon) * 111.32 * math.cos(math.radians(lat))
+        dist_north  = max(0, lat - bounds[3]) * 111.32 # max_lat
+        dist_south  = max(0, bounds[1] - lat) * 111.32 # min_lat
+        dist_east   = max(0, lon - bounds[2]) * 111.32 * math.cos(math.radians(lat)) # max_lon
+        dist_west   = max(0, bounds[0] - lon) * 111.32 * math.cos(math.radians(lat)) # min_lon
         
         # Находим минимальное расстояние до границы
         min_distance = min(dist_north, dist_south, dist_east, dist_west)
@@ -66,10 +70,5 @@ class Route:
             
         if not all(self._point_in_bounds(bounds, point) for point in self.points):
             return False
-        
-        if len(self.points) != len(self.elevations):
-            raise ValueError("Количество точек и высот не совпадает")
-        
+            
         return True
-    
-    

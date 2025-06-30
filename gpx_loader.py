@@ -42,27 +42,29 @@ class LocalGPXLoader:
         """Загружает все валидные маршруты из локальной папки"""
         print_step("GPX", f"Поиск GPX-файлов в {GPX_DIR}")
         routes = []
-        
         for gpx_file in GPX_DIR.glob("*.gpx"):
             try:
-                print_step("GPX", f"Обработка файла: {gpx_file.name}")
                 with open(gpx_file, 'r', encoding='utf-8') as f:
                     gpx = gpxpy.parse(f)
                     metadata = self._extract_metadata(gpx)
                     
-                    points = []
-                    elevations = []
-                    descriptions = []
-                    
+                    points: List[GeoPoint] = [] # Изменено: теперь список GeoPoint
+                    elevations: List[float] = []
+                    descriptions: List[str] = []
+
                     for track in gpx.tracks:
                         for segment in track.segments:
                             for point in segment.points:
-                                points.append((point.latitude, point.longitude))
+                                # Изменено: Создаем объект GeoPoint
+                                points.append(GeoPoint(point.latitude, point.longitude)) 
                                 elevations.append(point.elevation or 0)
                                 desc = f"{metadata['name']} - {point.time}" if point.time else metadata['name']
                                 descriptions.append(desc)
                     
-                    
+                    if not points:
+                        print_step("GPX", f"Файл {gpx_file.name} не содержит точек и будет пропущен.")
+                        continue
+
                     route = Route(
                         name=metadata['name'],
                         points=points,
@@ -83,10 +85,14 @@ if __name__ == "__main__":
     if routes:
         print("\nЗагруженные маршруты:")
         for i, route in enumerate(routes, 1):
-            print(f"{i}. {route['metadata']['name']}")
-            print(f"   Точек: {len(route['points'])}")
-            print(f"   Первая точка: {route['points'][0]}")
-            print(f"   Последняя точка: {route['points'][-1]}")
+            print(f"{i}. {route.name}") # Доступ к имени через .name
+            print(f"   Точек: {len(route.points)}")
+            # Проверяем, что это GeoPoint
+            if route.points:
+                print(f"   Первая точка: ({route.points[0].lat}, {route.points[0].lon})")
+                print(f"   Последняя точка: ({route.points[-1].lat}, {route.points[-1].lon})")
+            else:
+                print("   Точек нет.")
     else:
         print("Не найдено ни одного подходящего маршрута")
         print(f"Поместите GPX-файлы в папку {GPX_DIR}")

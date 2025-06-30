@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<gpx version="1.1" creator="Trailforks.com" xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:gpxtpx="http://www.garmin.com/xmlschemas/TrackPointExtension/v1" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd http://www.garmin.com/xmlschemas/TrackPointExtension/v1 http://www.garmin.com/xmlschemas/TrackPointExtensionv1.xsd">
+<metadata>
+<name>Фееричный</name>
+<link href="https://www.trailforks.com/">
+<text>Trailforks</text>
+</link>
+</metadata>
+<trk>
+<name>
+Фееричный
+</name>
+<trkseg>
+<trkpt lat="55.62848" lon="37.57517">
+<ele>185</ele>
+<time>2025-06-26T06:01:32-07:00</time>
+</trkpt>
+<trkpt lat="55.62865" lon="37.57556">
+<ele>183</ele>
+<time>2025-06-26T06:01:33-07:00</time>
+</trkpt>
+<trkpt lat="55.62868" lon="37.57564">
+<ele>183</ele>
+<time>2025-06-26T06:01:34-07:00</time>
+</trkpt>
+<trkpt lat="55.62871" lon="37.57602">
+<ele>183</ele>
+<time>2025-06-26T06:01:35-07:00</time>
+</trkpt>
+<trkpt lat="55.62874" lon="37.57612">
+<ele>183</ele>
+<time>2025-06-26T06:01:36-07:00</time>
+</trkpt>
+<trkpt lat="55.62874" lon="37.57625">
+<ele>183</ele>
+<time>2025-06-26T06:01:37-07:00</time>
+</trkpt>
+<trkpt lat="55.62873" lon="37.57635">
+<ele>183</ele>
+<time>2025-06-26T06:01:38-07:00</time>
+</trkpt>
+<trkpt lat="55.6287" lon="37.57647">
+<ele>183</ele>
+<time>2025-06-26T06:01:39-07:00</time>
+</trkpt>
+<trkpt lat="55.62865" lon="37.57654">
+<ele>183</ele>
+<time>2025-06-26T06:01:40-07:00</time>
+</trkpt>
+<trkpt lat="55.62864" lon="37.57663">
+<ele>183</ele>
+<time>2025-06-26T06:01:41-07:00</time>
+</trkpt>
+<trkpt lat="55.62862" lon="37.57678">
+<ele>183</ele>
+<time>2025-06-26T06:01:42-07:00</time>
+</trkpt>
+<trkpt lat="55.62868" lon="37.57688">
+<ele>183</ele>
+<time>2025-06-26T06:01:43-07:00</time>
+</trkpt>
+<trkpt lat="55.62896" lon="37.57707">
+<ele>181</ele>
+<time>2025-06-26T06:01:44-07:00</time>
+</trkpt>
+<trkpt lat="55.62901" lon="37.57716">
+<ele>181</ele>
+<time>2025-06-26T06:01:45-07:00</time>
+</trkpt>
+<trkpt lat="55.62908" lon="37.5774">
+<ele>182</ele>
+<time>2025-06-26T06:01:46-07:00</time>
+</trkpt>
+<trkpt lat="55.6291" lon="37.57753">
+<ele>181</ele>
+<time>2025-06-26T06:01:47-07:00</time>
+</trkpt>
+<trkpt lat="55.62909" lon="37.57771">
+<ele>181</ele>
+<time>2025-06-26T06:01:48-07:00</time>
+</trkpt>
+<trkpt lat="55.62912" lon="37.57778">
+<ele>181</ele>
+<time>2025-06-26T06:01:49-07:00</time>
+</trkpt>
+<trkpt lat="55.62916" lon="37.57782">
+<ele>181</ele>
+<time>2025-06-26T06:01:50-07:00</time>
+</trkpt>
+<trkpt lat="55.6292" lon="37.57785">
+<ele>181</ele>
+<time>2025-06-26T06:01:51-07:00</time>
+</trkpt>
+<trkpt lat="55.62924" lon="37.57784">
+<ele>181</ele>
+<time>2025-06-26T06:01:52-07:00</time>
+</trkpt>
+<trkpt lat="55.6293" lon="37.57784">
+<ele>181</ele>
+<time>2025-06-26T06:01:53-07:00</time>
+</trkpt>
+<trkpt lat="55.62936" lon="37.57787">
+<ele>183</ele>
+<time>2025-06-26T06:01:54-07:00</time>
+</trkpt>
+<trkpt lat="55.62942" lon="37.57789">
+<ele>183</ele>
+<time>2025-06-26T06:01:55-07:00</time>
+</trkpt>
+<trkpt lat="55.62946" lon="37.57787">
+<ele>183</ele>
+<time>2025-06-26T06:01:56-07:00</time>
+</trkpt>
+<trkpt lat="55.6295" lon="37.57788">
+<ele>183</ele>
+<time>2025-06-26T06:01:57-07:00</time>
+</trkpt>
+<trkpt lat="55.62953" lon="37.57794">
+<ele>183</ele>
+<time>2025-06-26T06:01:58-07:00</time>
+</trkpt>
+<trkpt lat="55.62955" lon="37.57804">
+<ele>183</ele>
+<time>2025-06-26T06:01:59-07:00</time>
+</trkpt>
+<trkpt lat="55.62955" lon="37.57818">
+<ele>181</ele>
+<time>2025-06-26T06:02:00-07:00</time>
+</trkpt>
+<trkpt lat="55.62953" lon="37.5783">
+<ele>181</ele>
+<time>2025-06-26T06:02:01-07:00</time>
+</trkpt>
+<trkpt lat="55.6295" lon="37.57853">
+<ele>181</ele>
+<time>2025-06-26T06:02:02-07:00</time>
+</trkpt>
+<trkpt lat="55.62951" lon="37.57867">
+<ele>180</ele>
+<time>2025-06-26T06:02:03-07:00</time>
+</trkpt>
+<trkpt lat="55.62955" lon="37.57877">
+<ele>180</ele>
+<time>2025-06-26T06:02:04-07:00</time>
+</trkpt>
+<trkpt lat="55.6296" lon="37.57887">
+<ele>180</ele>
+<time>2025-06-26T06:02:05-07:00</time>
+</trkpt>
+<trkpt lat="55.62965" lon="37.57893">
+<ele>180</ele>
+<time>2025-06-26T06:02:06-07:00</time>
+</trkpt>
+<trkpt lat="55.62973" lon="37.57899">
+<ele>180</ele>
+<time>2025-06-26T06:02:07-07:00</time>
+</trkpt>
+<trkpt lat="55.62981" lon="37.57904">
+<ele>180</ele>
+<time>2025-06-26T06:02:08-07:00</time>
+</trkpt>
+<trkpt lat="55.62988" lon="37.57904">
+<ele>180</ele>
+<time>2025-06-26T06:02:09-07:00</time>
+</trkpt>
+<trkpt lat="55.62994" lon="37.57899">
+<ele>180</ele>
+<time>2025-06-26T06:02:10-07:00</time>
+</trkpt>
+<trkpt lat="55.63" lon="37.57902">
+<ele>180</ele>
+<time>2025-06-26T06:02:11-07:00</time>
+</trkpt>
+<trkpt lat="55.63004" lon="37.57906">
+<ele>180</ele>
+<time>2025-06-26T06:02:12-07:00</time>
+</trkpt>
+<trkpt lat="55.63007" lon="37.57916">
+<ele>180</ele>
+<time>2025-06-26T06:02:13-07:00</time>
+</trkpt>
+<trkpt lat="55.6303" lon="37.57935">
+<ele>177</ele>
+<time>2025-06-26T06:02:14-07:00</time>
+</trkpt>
+<trkpt lat="55.63037" lon="37.57945">
+<ele>177</ele>
+<time>2025-06-26T06:02:15-07:00</time>
+</trkpt>
+<trkpt lat="55.63062" lon="37.5799">
+<ele>176</ele>
+<time>2025-06-26T06:02:16-07:00</time>
+</trkpt>
+</trkseg>
+</trk>
+</gpx>
