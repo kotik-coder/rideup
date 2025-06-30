@@ -4,29 +4,23 @@ from scipy.interpolate import Akima1DInterpolator
 
 from datetime import datetime
 
-# Removed: from pandas import DataFrame (not used in remaining code)
-# Removed: import folium (not used for Plotly map)
-# Removed: from folium.plugins import MousePosition, MarkerCluster (not used for Plotly map)
-# Removed: from PyQt5.QtCore import QUrl (not used)
-
-from map_helpers import print_step, safe_get_elevation, get_boundary_point, generate_nearby_point, get_landscape_description, get_boundary_near_point # Explicit imports
-from gpx_loader import LocalGPXLoader, Route # Explicit imports
-from route import GeoPoint # Explicit import for GeoPoint
+from map_helpers import print_step, safe_get_elevation, get_boundary_point, generate_nearby_point, get_landscape_description, get_boundary_near_point
+from gpx_loader import LocalGPXLoader, Route
+from route import GeoPoint
+from media_helpers import get_photo_html # <--- ADD THIS LINE
 
 from typing import List, Tuple
 from dataclasses import dataclass
-from shapely.geometry import Point, Polygon # Explicit import for shapely Point and Polygon
+from shapely.geometry import Point, Polygon
 
 
 class RouteManager():
-
-    # Removed: map : folium.Map # No longer managing Folium map
 
     bounds       : List[float]
     valid_routes : List[Route]
 
     def __init__(self, geostring : str):
-        self.bounds = self.get_forest_bounds(geostring) # Call the new method for bounds only
+        self.bounds = self.get_forest_bounds(geostring)
         self.valid_routes     = self.load_valid_routes()
 
     def load_valid_routes(self):
@@ -51,10 +45,7 @@ class RouteManager():
             return bounds
         except Exception as e:
             print_step("Ошибка", f"Не удалось получить границы для {geostring}: {e}")
-            # Fallback to a default or raise an error if bounds are critical
             return [37.5, 55.5, 37.6, 55.6] # Example default bounds if OSMnx fails
-
-    # Removed: save_map method (was for Folium)
     
     def generate_route(self, polygon: Polygon, bounds: List[float]) -> Tuple[List[Tuple[float, float]], List[str], List[float], List[str]]:
         """Генерация маршрута с проверкой всех точек"""
@@ -100,7 +91,7 @@ class RouteManager():
         attempts = 0
         
         while attempts < 100:
-            candidate = get_boundary_near_point(polygon, bounds, points[-1], 500) # Corrected: use imported helper
+            candidate = get_boundary_near_point(polygon, bounds, points[-1], 500)
             if (candidate and 
                 polygon.boundary.distance(Point(float(candidate[1]), float(candidate[0]))) < 0.0002):
                 end_point = candidate
@@ -118,8 +109,13 @@ class RouteManager():
     
     # --- Route Data Processing Methods (Moved from map.py and integrated) ---
     def _process_route(self, route: Route):
+        print_step("Процессинг", f"Начинаю обработку маршрута: {route.name}")
+        
         smooth_points, smooth_elevations = self._create_smooth_route(route)
+        print_step("Процессинг", f"Маршрут '{route.name}': Получено {len(smooth_points)} сглаженных точек.")
+        
         checkpoints = self._get_checkpoints(route, smooth_points, smooth_elevations)
+        print_step("Процессинг", f"Маршрут '{route.name}': Получено {len(checkpoints)} чекпоинтов.")
         
         if smooth_points and checkpoints:
             total_dist_so_far = 0
@@ -133,11 +129,18 @@ class RouteManager():
                     total_dist_so_far += p1.distance_to(p2)
                 cp['distance_from_start'] = total_dist_so_far
                 current_smooth_idx = target_smooth_idx
+            print_step("Процессинг", f"Маршрут '{route.name}': Расстояния чекпоинтов рассчитаны.")
+        else:
+            print_step("Процессинг", f"Маршрут '{route.name}': Пропущен расчет расстояний чекпоинтов из-за отсутствия сглаженных точек или чекпоинтов.")
+
 
         segments = self._calculate_segments(checkpoints, smooth_elevations)
-        elevation_profile = self._create_elevation_profile(smooth_points, smooth_elevations)
+        print_step("Процессинг", f"Маршрут '{route.name}': Получено {len(segments)} сегментов.")
         
-        return {
+        elevation_profile = self._create_elevation_profile(smooth_points, smooth_elevations)
+        print_step("Процессинг", f"Маршрут '{route.name}': Получен профиль высот с {len(elevation_profile)} точками.")
+        
+        processed_route_dict = {
             'name': route.name,
             'checkpoints': checkpoints,
             'segments': segments,
@@ -146,11 +149,16 @@ class RouteManager():
             'raw_elevations': route.elevations,
             'smooth_points': smooth_points
         }
+        
+        print_step("Процессинг", f"Заканчиваю обработку маршрута: {route.name}. Возвращаю данные (первые 300 символов): {str(processed_route_dict)[:300]}")
+        return processed_route_dict
 
     def _create_elevation_profile(self, points: List[Tuple[float, float]], elevations: List[float]):
         profile = []
         total_distance = 0
-        if not points or not elevations: return []
+        if not points or not elevations:
+            print_step("Процессинг", "Создание профиля высот: Пустые точки или высоты. Возвращаю пустой профиль.")
+            return []
         
         profile.append({'distance': 0, 'elevation': elevations[0]})
         for i in range(1, len(points)):
@@ -161,7 +169,9 @@ class RouteManager():
         return profile
 
     def _get_checkpoints(self, route: Route, smooth_route: List[Tuple[float, float]], route_elevations: List[float]):
-        if len(smooth_route) < 2: return []
+        if len(smooth_route) < 2:
+            print_step("Процессинг", "Получение чекпоинтов: Слишком мало сглаженных точек. Возвращаю пустой список.")
+            return []
 
         distances = [0.0]
         for i in range(1, len(smooth_route)):
@@ -202,7 +212,7 @@ class RouteManager():
                 'elevation': route_elevations[idx],
                 'name': point_name,
                 'description': route.descriptions[closest_original_idx] if closest_original_idx < len(route.descriptions) else "",
-                'photo_html': get_photo_html(point[0], point[1])
+                'photo_html': get_photo_html(point[0], point[1]) # <--- RE-ENABLE THIS LINE
             }
             checkpoints.append(checkpoint)
         
@@ -210,6 +220,10 @@ class RouteManager():
 
     def _calculate_segments(self, checkpoints: List[dict], elevations: List[float]):
         segments = []
+        if not checkpoints or len(checkpoints) < 2:
+            print_step("Процессинг", "Расчет сегментов: Нет чекпоинтов или слишком мало. Возвращаю пустой список.")
+            return []
+
         for i in range(1, len(checkpoints)):
             start_cp = checkpoints[i-1]
             end_cp = checkpoints[i]
@@ -218,7 +232,9 @@ class RouteManager():
             end_idx = end_cp['point_index']
             
             segment_elevations = elevations[start_idx:end_idx+1]
-            if not segment_elevations: continue
+            if not segment_elevations:
+                print_step("Процессинг", f"Расчет сегментов: Сегмент от {start_idx} до {end_idx} не имеет данных о высоте. Пропускаю.")
+                continue
 
             segments.append({
                 'distance': end_cp.get('distance_from_start', 0) - start_cp.get('distance_from_start', 0),
@@ -232,6 +248,7 @@ class RouteManager():
     
     def _create_smooth_route(self, route: Route):
         if len(route.points) < 4:
+            print_step("Процессинг", f"Сглаживание маршрута '{route.name}': Менее 4 точек. Возвращаю необработанные точки.")
             return [(p.lat, p.lon) for p in route.points], route.elevations
             
         points = np.array([(p.lat, p.lon) for p in route.points])
@@ -244,6 +261,7 @@ class RouteManager():
             distances[i] = distances[i-1] + p1.distance_to(p2)
         
         if distances[-1] == 0:
+            print_step("Процессинг", f"Сглаживание маршрута '{route.name}': Нулевая длина маршрута. Возвращаю необработанные точки.")
             return [(p.lat, p.lon) for p in route.points], route.elevations
 
         t = distances / distances[-1]
