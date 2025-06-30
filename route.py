@@ -17,6 +17,56 @@ class GeoPoint:
         """Вычисляет расстояние между двумя точками в метрах (упрощенная формула)"""
         lat2, lon2 = point.lat, point.lon
         return math.sqrt((lat2-self.lat)**2 + (lon2-self.lon)**2) * 111320  # Примерно 111 км на градус
+    
+    def bearing_to(self, other_point: "GeoPoint") -> float:
+        """
+        Calculates the initial bearing (direction) from this GeoPoint to another GeoPoint.
+        Args:
+            other_point (GeoPoint): The destination GeoPoint.
+        Returns:
+            float: Bearing in degrees (0-360) from true North.
+        """
+        lat1_rad = math.radians(self.lat)
+        lon1_rad = math.radians(self.lon)
+        lat2_rad = math.radians(other_point.lat)
+        lon2_rad = math.radians(other_point.lon)
+
+        delta_lon = lon2_rad - lon1_rad
+
+        x = math.cos(lat2_rad) * math.sin(delta_lon)
+        y = math.cos(lat1_rad) * math.sin(lat2_rad) - math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(delta_lon)
+
+        initial_bearing_rad = math.atan2(x, y)
+        initial_bearing_deg = math.degrees(initial_bearing_rad)
+
+        # Normalize to 0-360 degrees
+        return (initial_bearing_deg + 360) % 360
+
+    def point_at_distance_and_bearing(self, distance_m: float, bearing_deg: float) -> "GeoPoint":
+        """
+        Calculates a new GeoPoint given this GeoPoint, a distance, and a bearing.
+        Args:
+            distance_m (float): Distance in meters.
+            bearing_deg (float): Bearing in degrees from true North (0-360).
+        Returns:
+            GeoPoint: A new GeoPoint instance.
+        """
+        R = 6371000  # Radius of Earth in meters
+
+        lat_rad = math.radians(self.lat)
+        lon_rad = math.radians(self.lon)
+        bearing_rad = math.radians(bearing_deg)
+
+        new_lat_rad = math.asin(math.sin(lat_rad) * math.cos(distance_m / R) +
+                                math.cos(lat_rad) * math.sin(distance_m / R) * math.cos(bearing_rad))
+
+        new_lon_rad = lon_rad + math.atan2(math.sin(bearing_rad) * math.sin(distance_m / R) * math.cos(lat_rad),
+                                         math.cos(distance_m / R) - math.sin(lat_rad) * math.sin(new_lat_rad))
+
+        new_lat = math.degrees(new_lat_rad)
+        new_lon = math.degrees(new_lon_rad)
+
+        return GeoPoint(new_lat, new_lon)
 
 @dataclass
 class Route:
