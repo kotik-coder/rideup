@@ -1,49 +1,56 @@
-# rideup
+# RideUp - Веломаршруты в Битцевском лесу
 
-Проект для визуализации велосипедного маршрута в Битцевском лесу (Москва) с возможностью переключения между схематичной и спутниковой картами.
+RideUp - это интерактивная карта веломаршрутов в Битцевском лесу (Москва) с визуализацией высот и ключевых точек маршрута.
 
-## Особенности
+## Возможности
 
-- Автоматическая генерация маршрута по заданным правилам:
-  - Старт и финиш на границе леса
-  - Расстояние между точками ≤500 м
-  - Финиш в пределах 500 м от последней точки
-- Визуализация маршрута с цветовым градиентом
-- Два режима отображения карты:
-  - Схема (OpenStreetMap)
-  - Спутниковые снимки (ArcGIS)
-- Серые области за пределами зоны маршрута
+- Просмотр предварительно загруженных GPX-треков
+- Визуализация маршрутов с цветовой кодировкой по высоте
+- Интерактивный профиль высот
+- Информация о ключевых точках маршрута (чекпоинтах)
+- Автоматическая загрузка фотографий местности для чекпоинтов
 
-## Требования
+## Установка и запуск
 
-- Python 3.7+
-- Установленные пакеты:
-  ```
-  pip install PyQt5 folium osmnx shapely branca
-  ```
+1. Клонируйте репозиторий:
+```bash
+git clone https://github.com/yourusername/rideup.git
+cd rideup
+```
 
-## Запуск
+2. Установите необходимые зависимости одной командой:
+```bash
+pip install dash dash-bootstrap-components plotly osmnx gpxpy numpy scipy pillow piexif requests shapely
+```
 
+3. Создайте папку для GPX-файлов:
+```bash
+mkdir local_routes
+```
+
+4. Поместите ваши GPX-треки в папку `local_routes`
+
+5. Запустите приложение:
 ```bash
 python map.py
 ```
 
-## Лицензия
+6. Откройте браузер по адресу: `http://127.0.0.1:8050/`
 
-Apache License 2.0
+## Особенности работы
 
-```
-Copyright 2023 Artem Lunev
+Приложение автоматически:
+- Загружает все GPX-файлы из папки `local_routes`
+- Строит сглаженные маршруты с профилем высот
+- Загружает фотографии местности для ключевых точек маршрута
+- Позволяет интерактивно изучать маршруты на карте
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+## Структура проекта
 
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-```
+- `map.py` - Основное приложение Dash
+- `route_manager.py` - Логика работы с маршрутами
+- `route.py` - Классы для работы с географическими точками и маршрутами
+- `gpx_loader.py` - Загрузчик GPX-файлов
+- `map_helpers.py` - Вспомогательные функции для работы с картой
+- `media_helpers.py` - Работа с фотографиями и медиа
+- `local_routes/` - Папка для хранения GPX-файлов
