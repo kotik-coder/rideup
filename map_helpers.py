@@ -13,9 +13,9 @@ from datetime import datetime
 CACHE_FILE = Path("elevation_cache.json")
 REQUEST_DELAY = 1.0  # Задержка между запросами в секундах
 
-def print_step(prefix : str, message: str):
+def print_step(prefix : str, message: str, level: str = "INFO"):
     timestamp = datetime.now().strftime('%H:%M:%S')
-    print(f"[{timestamp}] [{prefix}] {message}")
+    print(f"[{timestamp}] [{prefix}] [{level}] {message}")
 
 class ElevationCache:
     def __init__(self):
@@ -201,3 +201,63 @@ def get_landscape_description(elevation: float, delta: float) -> str:
         desc += "Пологий участок."
     
     return desc
+
+def point_to_segment_projection_and_distance(
+    point_lat: float, point_lon: float,
+    seg_start_lat: float, seg_start_lon: float,
+    seg_end_lat: float, seg_end_lon: float
+) -> Tuple[float, float, float, float]: # <--- Changed return type to include t
+    """
+    Calculates the shortest distance from a point to a line segment
+    and returns the coordinates of the projected point on the segment,
+    as well as the 't' value (normalized position along the segment).
+    Uses a simplified Cartesian-like distance for projection, then converts
+    the final small distance to meters.
+
+    Args:
+        point_lat, point_lon: Coordinates of the photo checkpoint.
+        seg_start_lat, seg_start_lon: Coordinates of the start of the route segment.
+        seg_end_lat, seg_end_lon: Coordinates of the end of the route segment.
+
+    Returns:
+        Tuple[float, float, float, float]:
+        (distance_in_meters, projected_lat, projected_lon, t_value)
+        where t_value is between 0.0 and 1.0 if projection is on segment,
+        <0.0 if closer to start, >1.0 if closer to end.
+    """
+
+    lat_to_m = 111320
+    lon_to_m = 111320 * math.cos(math.radians(point_lat))
+
+    Px, Py = point_lon * lon_to_m, point_lat * lat_to_m
+    Ax, Ay = seg_start_lon * lon_to_m, seg_start_lat * lat_to_m
+    Bx, By = seg_end_lon * lon_to_m, seg_end_lat * lat_to_m
+
+    ABx, ABy = Bx - Ax, By - Ay
+    APx, APy = Px - Ax, Py - Ay
+
+    len_sq_AB = ABx**2 + ABy**2
+
+    if len_sq_AB == 0: # Segment is a point
+        dist = math.sqrt(APx**2 + APy**2)
+        # For a point segment, t can be considered 0.0 (at A)
+        return dist, seg_start_lat, seg_start_lon, 0.0 # <--- Changed return
+
+    t = (APx * ABx + APy * ABy) / len_sq_AB
+
+    if t < 0.0:
+        projected_x, projected_y = Ax, Ay
+    elif t > 1.0:
+        projected_x, projected_y = Bx, By
+    else:
+        projected_x = Ax + t * ABx
+        projected_y = Ay + t * ABy
+
+    dx = Px - projected_x
+    dy = Py - projected_y
+    distance_in_meters = math.sqrt(dx**2 + dy**2)
+
+    projected_lon = projected_x / lon_to_m
+    projected_lat = projected_y / lat_to_m
+
+    return distance_in_meters, projected_lat, projected_lon, t

@@ -1,3 +1,4 @@
+import os
 import dash
 from dash import dcc, html, Input, Output, State
 import dash_bootstrap_components as dbc
@@ -8,13 +9,22 @@ from route import GeoPoint
 from datetime import datetime
 from map_helpers import print_step
 import json
-from media_helpers import get_photo_html, get_landscape_photo
-from typing import List, Tuple, Dict
-from pathlib import Path
+from flask import send_from_directory
 
 class BitsevskyMapApp:
     def __init__(self):
-        self.app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+        self.app = dash.Dash(__name__,
+                             external_stylesheets=[dbc.themes.BOOTSTRAP])
+
+        local_photos_dir = os.path.join(os.path.dirname(__file__), 'local_photos')
+        print(f"DEBUG: local_photos_dir is set to: {local_photos_dir}") # <--- ADD THIS LINE FOR DEBUGGING
+        
+        self.app.server.add_url_rule(
+            '/local_photos/<path:filename>',
+            endpoint='local_photos',
+            view_func=lambda filename: send_from_directory(local_photos_dir, filename)
+        )
+
         self._print_header()
         self.rm = RouteManager("Битцевский лес, Москва")
         self.selected_route_index = None

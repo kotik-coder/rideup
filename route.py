@@ -90,13 +90,9 @@ class Route:
         }
 
     def _point_in_bounds(self, bounds : List[float], point: GeoPoint) -> bool:
-        # Изменено: Доступ к lat и lon через атрибуты объекта GeoPoint
         lat = point.lat
         lon = point.lon
         
-        # --- Исправлено ---
-        # Правильная проверка границ: широта с границами по широте, долгота с границами по долготе.
-        # bounds = [min_lon, min_lat, max_lon, max_lat]
         if (bounds[1] <= lat <= bounds[3] and
             bounds[0] <= lon <= bounds[2]):
             return True

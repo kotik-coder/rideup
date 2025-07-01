@@ -215,9 +215,19 @@ def _get_yandex_satellite(lat: float, lon: float) -> str:
     }
     return f"https://static-maps.yandex.ru/1.x/?{urlencode(params)}"
 
-def get_photo_html(lat: float, lon: float) -> str:
+def get_photo_html(lat: float, lon: float, local_photo_path: Optional[str] = None) -> str:
     """Генерация HTML с защитой от ошибок"""
-    photo_url, source = get_landscape_photo(lat, lon)
+    photo_url = None
+    source = ""
+
+    if local_photo_path:
+        # Assuming local_photos folder is served as /static/local_photos/
+        # Extract just the filename from the path
+        filename = Path(local_photo_path).name
+        photo_url = f"/static/local_photos/{filename}"
+        source = "Локальное фото"
+    else:
+        photo_url, source = get_landscape_photo(lat, lon)
     
     if not photo_url:
         return """
