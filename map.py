@@ -262,6 +262,66 @@ class BitsevskyMapApp:
         def sync_route_selector(route_index):
             return route_index
 
+        def get_fill_polygons(distances, elevations, median_elevation):
+            """
+            Generates polygon coordinates for areas above (red) and below (green) the median elevation.
+            These polygons are used with fill='toself' in Plotly to achieve precise conditional filling.
+
+            Args:
+                distances (list): List of distances corresponding to elevation points.
+                elevations (list): List of elevation values.
+                median_elevation (float): The calculated median elevation for the profile.
+
+            Returns:
+                tuple: A tuple containing two lists:
+                    - red_polygons (list of lists of tuples): Polygons for areas above median.
+                    - green_polygons (list of lists of tuples): Polygons for areas below median.
+            """
+            red_polygons = []   # Stores polygons for areas where elevation > median
+            green_polygons = [] # Stores polygons for areas where elevation < median
+
+            # Iterate through each segment (pair of consecutive points) in the elevation profile
+            for i in range(len(distances) - 1):
+                d1, e1 = distances[i], elevations[i]
+                d2, e2 = distances[i+1], elevations[i+1]
+
+                # Determine if the current point and next point are above or below the median
+                is_p1_above_median = (e1 >= median_elevation)
+                is_p2_above_median = (e2 >= median_elevation)
+
+                # Case 1: Both points are above or on the median
+                if is_p1_above_median and is_p2_above_median:
+                    # Create a trapezoid: (d1, e1) -> (d2, e2) -> (d2, median) -> (d1, median)
+                    red_polygons.append([(d1, e1), (d2, e2), (d2, median_elevation), (d1, median_elevation)])
+                # Case 2: Both points are below or on the median
+                elif not is_p1_above_median and not is_p2_above_median:
+                    # Create a trapezoid: (d1, e1) -> (d2, e2) -> (d2, median) -> (d1, median)
+                    green_polygons.append([(d1, e1), (d2, e2), (d2, median_elevation), (d1, median_elevation)])
+                # Case 3: The segment crosses the median line
+                else:
+                    # Calculate the intersection point with the median line
+                    intersect_d = 0.0
+                    if d2 - d1 == 0: # Handle vertical lines (should be rare for elevation profiles)
+                        intersect_d = d1
+                    else:
+                        # Linear interpolation to find the x-coordinate (distance) of the intersection
+                        t = (median_elevation - e1) / (e2 - e1)
+                        intersect_d = d1 + t * (d2 - d1)
+                    
+                    intersect_point = (intersect_d, median_elevation)
+
+                    if is_p1_above_median and not is_p2_above_median: # Crosses from above to below
+                        # Red polygon: Triangle formed by (d1, e1), intersection, and (d1, median)
+                        red_polygons.append([(d1, e1), intersect_point, (d1, median_elevation)])
+                        # Green polygon: Quadrilateral formed by intersection, (d2, e2), (d2, median), and intersection
+                        green_polygons.append([intersect_point, (d2, e2), (d2, median_elevation), intersect_point])
+                    elif not is_p1_above_median and is_p2_above_median: # Crosses from below to above
+                        # Green polygon: Triangle formed by (d1, e1), intersection, and (d1, median)
+                        green_polygons.append([(d1, e1), intersect_point, (d1, median_elevation)])
+                        # Red polygon: Quadrilateral formed by intersection, (d2, e2), (d2, median), and intersection
+                        red_polygons.append([intersect_point, (d2, e2), (d2, median_elevation), intersect_point])
+            return red_polygons, green_polygons
+
         @self.app.callback(
             Output('route-general-info', 'children'),
             Output('elevation-profile', 'figure'),
@@ -271,55 +331,102 @@ class BitsevskyMapApp:
             State('route-data-store', 'data')
         )
         def update_all_info(selected_route_index, checkpoint_index, route_data_json):
+            """
+            Updates the route general information, elevation profile graph, and checkpoint info
+            based on the selected route and checkpoint.
+            """
             if selected_route_index is None or not route_data_json:
+                # Return empty state if no route is selected or data is missing
                 empty_fig = go.Figure().update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=250)
-                print_step("Callback", "update_all_info: No route selected or data empty. Returning default.")
                 return "Выберите маршрут", empty_fig, "Выберите чекпоинт на карте"
                 
             route_data = json.loads(route_data_json)
             if selected_route_index >= len(route_data):
-                print_step("Callback", f"update_all_info: selected_route_index ({selected_route_index}) out of bounds ({len(route_data)}).")
+                # Handle invalid route index
                 return dash.no_update, dash.no_update, dash.no_update
 
             route = route_data[selected_route_index]
-            print_step("Callback", f"update_all_info: Updating info for route: {route['name']}")
             
+            # Calculate basic statistics for the route
             total_distance = sum(segment['distance'] for segment in route['segments'])
-            elevation_gain = sum(max(0, segment['elevation_gain']) for segment in route['segments'])
-            elevation_loss = sum(abs(min(0, segment['elevation_loss'])) for segment in route['segments'])
+            elevations = [ep['elevation'] for ep in route['elevation_profile']]
+            distances = [ep['distance'] for ep in route['elevation_profile']]
             
-            info_content = [
-                html.H5(route['name'], className="card-title"),
-                html.P(f"Общая длина: {total_distance:.1f} м"),
-                html.P(f"Набор высоты: {elevation_gain:.1f} м"),
-                html.P(f"Потеря высоты: {elevation_loss:.1f} м"),
-                html.P(f"Чекпоинтов: {len(route['checkpoints'])}")
-            ]
+            # Calculate median elevation
+            median_elevation = sorted(elevations)[len(elevations)//2]
             
+            # Count photo checkpoints
+            photo_checkpoints = sum(1 for cp in route['checkpoints'] if "Фототочка" in cp.get('name', ''))
+
+
+            # Calculate elevation range with padding for better visualization
+            min_elevation = min(elevations)
+            max_elevation = max(elevations)
+            elevation_range = max_elevation - min_elevation
+            ascension  = max_elevation - median_elevation
+            depression = median_elevation - min_elevation
+            y_axis_min = min_elevation - elevation_range * 0.1  # 10% padding below min elevation
+            y_axis_max = max_elevation + elevation_range * 0.1  # 10% padding above max elevation
+
+            # Create the Plotly figure for the elevation profile
             elevation_fig = go.Figure()
+
+            # Get the polygons for the filled areas (red for above median, green for below median)
+            red_polygons, green_polygons = get_fill_polygons(distances, elevations, median_elevation)
+
+            # Add red filled areas for segments above the median
+            for poly in red_polygons:
+                x_poly = [p[0] for p in poly]
+                y_poly = [p[1] for p in poly]
+                elevation_fig.add_trace(go.Scatter(
+                    x=x_poly,
+                    y=y_poly,
+                    fill='toself', # Fill the defined polygon
+                    fillcolor='rgba(255, 0, 0, 0.3)', # Red with transparency
+                    line=dict(color='rgba(0,0,0,0)'), # Make the polygon boundary line invisible
+                    showlegend=False,
+                    name='Набор высоты (заполнено)',
+                    hoverinfo='none' # Disable hover for fill areas
+                ))
+
+            # Add green filled areas for segments below the median
+            for poly in green_polygons:
+                x_poly = [p[0] for p in poly]
+                y_poly = [p[1] for p in poly]
+                elevation_fig.add_trace(go.Scatter(
+                    x=x_poly,
+                    y=y_poly,
+                    fill='toself', # Fill the defined polygon
+                    fillcolor='rgba(0, 200, 0, 0.3)', # Green with transparency
+                    line=dict(color='rgba(0,0,0,0)'), # Make the polygon boundary line invisible
+                    showlegend=False,
+                    name='Потеря высоты (заполнено)',
+                    hoverinfo='none' # Disable hover for fill areas
+                ))
+
+            # Add the median line as a dashed line
+            elevation_fig.add_shape(
+                type='line',
+                x0=0,
+                y0=median_elevation,
+                x1=distances[-1],
+                y1=median_elevation,
+                line=dict(color='gray', width=1, dash='dash'),
+                name='Медианная высота',
+                layer='below' # Ensure median line is below the main elevation line but above fills
+            )
+
+            # Add the main elevation line
             elevation_fig.add_trace(go.Scatter(
-                x=[x['distance'] for x in route['elevation_profile']],
-                y=[x['elevation'] for x in route['elevation_profile']],
+                x=distances,
+                y=elevations,
                 mode='lines',
-                line=dict(color='green', width=2),
-                fill='tozeroy',
-                name='Высота'
+                line=dict(color='black', width=2),
+                name='Высота',
+                hovertemplate="Расстояние: %{x:.0f} м<br>Высота: %{y:.1f} м<extra></extra>"
             ))
 
-            elevations_in_profile = [x['elevation'] for x in route['elevation_profile']]
-            
-            min_elevation = 0
-            max_elevation = 100 # Default sensible range if no elevation data
-            y_axis_min = 0
-
-            if elevations_in_profile:
-                min_elevation = min(elevations_in_profile)
-                max_elevation = max(elevations_in_profile)
-                
-                y_axis_min = min_elevation - (max_elevation - min_elevation) * 0.1
-                if y_axis_min < 0:
-                    y_axis_min = 0 
-            
+            # Add checkpoints as markers on the elevation profile
             for i, checkpoint in enumerate(route['checkpoints']):
                 elevation_fig.add_trace(go.Scatter(
                     x=[checkpoint['distance_from_start']],
@@ -328,31 +435,47 @@ class BitsevskyMapApp:
                     marker=dict(
                         size=12,
                         symbol='circle',
-                        color='yellow' if i == checkpoint_index else 'blue',
+                        color='yellow' if i == checkpoint_index else 'blue', # Highlight selected checkpoint
                         line=dict(width=2, color='darkblue')
                     ),
                     name=checkpoint['name'],
                     hoverinfo='text',
                     hovertext=f"{checkpoint['name']} ({checkpoint['elevation']:.1f} м)"
                 ))
-            
+
+            # Update the layout of the elevation figure
             elevation_fig.update_layout(
-                margin={"r":20,"t":20,"l":40,"b":40},
+                margin={"r":20,"t":20,"l":40,"b":40}, # Adjust margins
                 xaxis_title="Расстояние (м)",
                 yaxis_title="Высота (м)",
                 height=250,
-                showlegend=False,
-                yaxis=dict(range=[y_axis_min, max_elevation + (max_elevation - min_elevation) * 0.1])
+                showlegend=False, # Hide legend for cleaner look
+                hovermode='x unified', # Show unified hover info for x-axis
+                yaxis=dict(
+                    range=[y_axis_min, y_axis_max], # Set y-axis range with padding
+                    tickformat=".0f" # Format y-axis ticks as integers
+                )
             )
-            
+
+            # Prepare the route general information content
+            info_content = [
+                html.H5(route['name'], className="card-title"),
+                html.P(f"Общая длина: {total_distance:.1f} м"),
+                html.P(f"Фототочек: {photo_checkpoints}"),
+                html.P(f"Медианная высота: {median_elevation:.1f} м"),
+                # Display ascension and depression relative to median with colors
+                html.P(f"Набор высоты (отн. медианы): {ascension:.1f} м", style={'color': 'red'}),
+                html.P(f"Перепад высоты (отн. медианы): {depression:.1f} м", style={'color': 'green'})
+            ]
+
+            # Prepare checkpoint information
             if checkpoint_index is not None and checkpoint_index < len(route['checkpoints']):
                 checkpoint_info = self._create_checkpoint_card(route['checkpoints'][checkpoint_index])
-                print_step("Callback", f"update_all_info: Displaying info for checkpoint {checkpoint_index}.")
             else:
                 checkpoint_info = "Выберите чекпоинт на карте"
-                print_step("Callback", "update_all_info: No checkpoint selected, displaying default.")
             
-            return info_content, elevation_fig, checkpoint_info 
+            # Return all updated outputs
+            return info_content, elevation_fig, checkpoint_info
 
     def _calculate_zoom(self, lats, lons):
         """

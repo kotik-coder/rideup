@@ -4,7 +4,7 @@ from scipy.interpolate import Akima1DInterpolator
 
 from datetime import datetime
 
-from map_helpers import print_step, safe_get_elevation, get_boundary_point, generate_nearby_point, get_landscape_description, get_boundary_near_point
+from map_helpers import point_to_segment_projection_and_distance, print_step, safe_get_elevation, get_boundary_point, generate_nearby_point, get_landscape_description, get_boundary_near_point
 from gpx_loader import LocalGPXLoader, Route
 from route import GeoPoint
 from media_helpers import *
@@ -149,14 +149,13 @@ class RouteManager():
             current_smooth_idx = 0
             for cp in checkpoints:
                 target_smooth_idx = cp['point_index']
-                # Accumulate distance from current_smooth_idx to target_smooth_idx
+                # Accumulate distance using piecewise linear segments
                 for k in range(current_smooth_idx, min(target_smooth_idx, len(smooth_points) - 1)):
                     p1 = GeoPoint(*smooth_points[k])
                     p2 = GeoPoint(*smooth_points[k+1])
                     total_dist_so_far += p1.distance_to(p2)
                 cp['distance_from_start'] = total_dist_so_far
                 current_smooth_idx = target_smooth_idx
-            print_step("Процессинг", f"Маршрут '{route.name}': Расстояния чекпоинтов рассчитаны.")
         else:
             print_step("Процессинг", f"Маршрут '{route.name}': Пропущен расчет расстояний чекпоинтов из-за отсутствия сглаженных точек или чекпоинтов.")
 
@@ -200,6 +199,7 @@ class RouteManager():
             print_step("Процессинг", "Получение чекпоинтов: Слишком мало сглаженных точек. Возвращаю пустой список.")
             return []
 
+        # Calculate cumulative distances along the smooth route
         distances = [0.0]
         for i in range(1, len(smooth_route)):
             p1 = GeoPoint(*smooth_route[i-1])
@@ -222,21 +222,41 @@ class RouteManager():
                 closest_idx = min(range(len(distances)), key=lambda x: abs(distances[x] - target_dist))
                 marker_indices.add(closest_idx)
 
-        # Add checkpoints from local photos if they are close to the route
+        # Add checkpoints from local photos using precise distance calculation
         PHOTO_CHECKPOINT_DISTANCE_THRESHOLD = 50.0 # meters
         for photo in local_photos:
             photo_lat, photo_lon = photo['coords']
             photo_point = GeoPoint(photo_lat, photo_lon)
 
-            # Find the closest point on the smooth route to the photo
             min_dist_to_route = float('inf')
             closest_smooth_idx = -1
-            for i, route_point_coords in enumerate(smooth_route):
-                route_point = GeoPoint(route_point_coords[0], route_point_coords[1])
-                dist = photo_point.distance_to(route_point)
+            closest_projected_point = None
+            closest_segment_idx = -1
+
+            # Find the closest segment to the photo point
+            for i in range(len(smooth_route) - 1):
+                seg_start = smooth_route[i]
+                seg_end = smooth_route[i+1]
+                
+                # Calculate projection and distance
+                dist, proj_lat, proj_lon, t = point_to_segment_projection_and_distance(
+                    photo_lat, photo_lon,
+                    seg_start[0], seg_start[1],
+                    seg_end[0], seg_end[1]
+                )
+                
                 if dist < min_dist_to_route:
                     min_dist_to_route = dist
-                    closest_smooth_idx = i
+                    closest_projected_point = (proj_lat, proj_lon)
+                    closest_segment_idx = i
+                    # The closest point is either the start, end, or somewhere in between
+                    if t <= 0:
+                        closest_smooth_idx = i
+                    elif t >= 1:
+                        closest_smooth_idx = i + 1
+                    else:
+                        # For points projected in the middle, we'll add a new point
+                        closest_smooth_idx = i  # We'll handle this specially later
 
             if closest_smooth_idx != -1 and min_dist_to_route <= PHOTO_CHECKPOINT_DISTANCE_THRESHOLD:
                 # Add this index as a potential checkpoint
@@ -244,12 +264,12 @@ class RouteManager():
                 print_step("Процессинг", f"Добавлен чекпоинт из фото: {photo['path']} (dist: {min_dist_to_route:.2f}m)")
 
         sorted_indices = sorted(list(marker_indices))
-
+        
         checkpoints = []
         for i, idx in enumerate(sorted_indices):
             point = smooth_route[idx]
             elevation = route_elevations[idx]
-
+            
             # Find if this checkpoint corresponds to a local photo
             photo_info = None
             for photo in local_photos:
