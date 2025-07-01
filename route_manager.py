@@ -1,8 +1,6 @@
 import osmnx as ox
 import numpy as np
-from scipy.interpolate import Akima1DInterpolator
-
-from datetime import datetime
+from scipy.interpolate import Akima1DInterpolator, interp1d
 
 from map_helpers import point_to_segment_projection_and_distance, print_step, safe_get_elevation, get_boundary_point, generate_nearby_point, get_landscape_description, get_boundary_near_point
 from gpx_loader import LocalGPXLoader, Route
@@ -12,6 +10,8 @@ from typing import List, Tuple, Dict
 from dataclasses import dataclass
 from shapely.geometry import Point, Polygon
 from pathlib import Path
+
+PHOTO_CHECKPOINT_DISTANCE_THRESHOLD = 125.0 # meters
 
 class RouteManager():
 
@@ -29,9 +29,8 @@ class RouteManager():
         self.valid_routes = self.load_valid_routes()
 
     def _load_local_photos(self, folder_path_str: str) -> List[Dict[str, any]]:
-        """Loads local photos with geolocation data from a specified folder."""
-        # This method is now called only when needed, and only once.
-        if self._photos_loaded: # <--- ADDED CHECK
+        """Loads local photos with geolocation and timestamp data from a specified folder."""
+        if self._photos_loaded:
             return self.local_photos
 
         print_step("Маршруты", f"Загружаю локальные фото из папки: {folder_path_str}...")
@@ -39,10 +38,24 @@ class RouteManager():
         if not folder_path.is_dir():
             print_step("Маршруты", f"Папка '{folder_path_str}' не найдена или не является директорией.", level="WARNING")
             return []
-        photos = get_photos_with_geolocation_from_folder(folder_path)
-        print_step("Маршруты", f"Найдено {len(photos)} фото с геометками.")
-        self.local_photos = photos # Store for future use within this instance
-        self._photos_loaded = True # Set flag to true
+        
+        photos = []
+        for ext in ['*.jpg', '*.jpeg', '*.png']:
+            for image_path in folder_path.glob(ext):
+                try:
+                    timestamp = get_photo_timestamp(image_path)                    
+                    if timestamp:
+                        photos.append({
+                            'path': str(image_path),
+                            'coords': get_exif_geolocation(image_path),
+                            'timestamp': timestamp
+                        })
+                except Exception:
+                    continue
+        
+        print_step("Маршруты", f"Найдено {len(photos)} фото с временными метками.")
+        self.local_photos = photos
+        self._photos_loaded = True
         return self.local_photos
 
     def load_valid_routes(self):
@@ -213,7 +226,50 @@ class RouteManager():
         marker_indices.add(0)
         marker_indices.add(len(smooth_route) - 1)
 
-        # Add uniformly spaced checkpoints
+        # Create a mutable copy of local_photos and track used photos
+        available_local_photos = list(local_photos)
+        used_photo_paths = set()
+
+        # Add checkpoints from local photos based on elapsed time matching (first pass)
+        if route.start_time:
+            route_start_time = route.start_time
+            route_duration = (route.end_time - route.start_time).total_seconds() if route.end_time else 0
+            
+            # Sort local photos by timestamp for consistent marker_indices generation
+            available_local_photos.sort(key=lambda x: x['timestamp'] if x['timestamp'] else datetime.min.replace(tzinfo=timezone.utc))
+
+            for photo in available_local_photos:
+                if photo['path'] in used_photo_paths:
+                    continue # Skip if already used
+
+                photo_time = photo.get('timestamp') # Use already extracted timestamp
+                if photo_time:
+                    photo_elapsed = (photo_time - route_start_time).total_seconds()
+                    
+                    # Only consider photos taken during the route
+                    if 0 <= photo_elapsed <= route_duration:
+                        # Find closest route point by elapsed time
+                        closest_idx = None
+                        min_time_diff = float('inf')
+                        
+                        for idx, point in enumerate(route.points):
+                            if point.elapsed_seconds is not None:
+                                time_diff = abs(photo_elapsed - point.elapsed_seconds)
+                                if time_diff < min_time_diff:
+                                    min_time_diff = time_diff
+                                    closest_idx = idx
+                        
+                        if closest_idx is not None and min_time_diff < 300:  # 5 minutes threshold
+                            # Find the closest smooth point to this route point
+                            route_point = route.points[closest_idx]
+                            closest_smooth_idx = min(
+                                range(len(smooth_route)),
+                                key=lambda x: GeoPoint(*smooth_route[x]).distance_to(route_point)
+                            )
+                            marker_indices.add(closest_smooth_idx)
+                            used_photo_paths.add(photo['path']) # Mark photo as used
+
+        # Add uniformly spaced checkpoints (after photo-based, to ensure photo points are prioritized)
         target_markers_uniform = min(20, max(5, int(total_length / 250))) if total_length > 0 else 2
         if target_markers_uniform > 2 and total_length > 0:
             step_length = total_length / (target_markers_uniform - 1)
@@ -222,67 +278,49 @@ class RouteManager():
                 closest_idx = min(range(len(distances)), key=lambda x: abs(distances[x] - target_dist))
                 marker_indices.add(closest_idx)
 
-        # Add checkpoints from local photos using precise distance calculation
-        PHOTO_CHECKPOINT_DISTANCE_THRESHOLD = 50.0 # meters
-        for photo in local_photos:
-            photo_lat, photo_lon = photo['coords']
-            photo_point = GeoPoint(photo_lat, photo_lon)
-
-            min_dist_to_route = float('inf')
-            closest_smooth_idx = -1
-            closest_projected_point = None
-            closest_segment_idx = -1
-
-            # Find the closest segment to the photo point
-            for i in range(len(smooth_route) - 1):
-                seg_start = smooth_route[i]
-                seg_end = smooth_route[i+1]
-                
-                # Calculate projection and distance
-                dist, proj_lat, proj_lon, t = point_to_segment_projection_and_distance(
-                    photo_lat, photo_lon,
-                    seg_start[0], seg_start[1],
-                    seg_end[0], seg_end[1]
-                )
-                
-                if dist < min_dist_to_route:
-                    min_dist_to_route = dist
-                    closest_projected_point = (proj_lat, proj_lon)
-                    closest_segment_idx = i
-                    # The closest point is either the start, end, or somewhere in between
-                    if t <= 0:
-                        closest_smooth_idx = i
-                    elif t >= 1:
-                        closest_smooth_idx = i + 1
-                    else:
-                        # For points projected in the middle, we'll add a new point
-                        closest_smooth_idx = i  # We'll handle this specially later
-
-            if closest_smooth_idx != -1 and min_dist_to_route <= PHOTO_CHECKPOINT_DISTANCE_THRESHOLD:
-                # Add this index as a potential checkpoint
-                marker_indices.add(closest_smooth_idx)
-                print_step("Процессинг", f"Добавлен чекпоинт из фото: {photo['path']} (dist: {min_dist_to_route:.2f}m)")
-
         sorted_indices = sorted(list(marker_indices))
         
         checkpoints = []
+        # Keep track of photos already assigned to a checkpoint in this loop for the final display
+        assigned_photos_for_checkpoints = set() 
+
+        # Re-sort available_local_photos by timestamp to ensure chronological assignment during checkpoint creation
+        # This is critical for preventing later photos from being incorrectly assigned to earlier checkpoints
+        available_local_photos.sort(key=lambda x: x['timestamp'] if x['timestamp'] else datetime.min.replace(tzinfo=timezone.utc))
+
         for i, idx in enumerate(sorted_indices):
             point = smooth_route[idx]
             elevation = route_elevations[idx]
             
-            # Find if this checkpoint corresponds to a local photo
+            # Find if this checkpoint corresponds to an UNUSED local photo by elapsed time
             photo_info = None
-            for photo in local_photos:
-                photo_lat, photo_lon = photo['coords']
-                photo_point = GeoPoint(photo_lat, photo_lon)
-                cp_point = GeoPoint(point[0], point[1])
-                if photo_point.distance_to(cp_point) <= PHOTO_CHECKPOINT_DISTANCE_THRESHOLD:
-                    photo_info = photo
-                    break
+            if route.start_time:
+                route_start_time = route.start_time
+                for photo in available_local_photos: # Now iterating over sorted photos
+                    if photo['path'] in assigned_photos_for_checkpoints:
+                        continue # Skip if already assigned to a checkpoint in this current loop
+
+                    photo_time = photo.get('timestamp') # Use already extracted timestamp
+                    if photo_time:
+                        photo_elapsed = (photo_time - route_start_time).total_seconds()
+                        
+                        # Find the closest route point to this checkpoint (based on location)
+                        closest_route_idx = min(
+                            range(len(route.points)),
+                            key=lambda x: GeoPoint(*point).distance_to(route.points[x])
+                        )
+                        route_point = route.points[closest_route_idx]
+                        
+                        # Check if photo time is within the threshold of the closest route point's time
+                        if (route_point.elapsed_seconds is not None and 
+                            abs(photo_elapsed - route_point.elapsed_seconds) < 300):  # 5 minutes threshold
+                            photo_info = photo
+                            assigned_photos_for_checkpoints.add(photo['path']) # Mark as assigned for this loop
+                            break # Found the earliest suitable photo for this checkpoint, break to prevent later photos from taking its place
 
             point_name = f"Точка {i+1}"
             description = ""
-            photo_html = "" # Initialize photo_html
+            photo_html = ""
 
             if i == 0:
                 point_name = "Старт"
@@ -292,33 +330,22 @@ class RouteManager():
                 description = "Конец маршрута."
 
             if photo_info:
-                # Removed the filename from the point_name
                 point_name = f"Фототочка"
-                # Removed the specific description text
-                description = "" # Or remove this line if 'description' is not used for photo checkpoints
+                # Adjust path for web display, assuming 'local_photos' folder is served statically
                 display_path = f"/local_photos/{Path(photo_info['path']).name}"
                 photo_html = f"""
                 <div style="margin:10px 0;text-align:center">
                     <img src="{display_path}"
-                         alt="{Path(photo_info['path']).name}"
-                         style="max-width:100%;max-height:200px;border-radius:4px;border:1px solid #eee;">
+                        alt="{Path(photo_info['path']).name}"
+                        style="max-width:100%;max-height:200px;border-radius:4px;border:1px solid #eee;">
                     <p style="font-size:0.8em;color:#999;margin-top:5px">
                         Источник: Локальное фото
                     </p>
                 </div>
                 """
-                # The rest of your checkpoint dictionary construction follows...
-                # Make sure the 'description' field in the checkpoint dictionary uses this modified 'description' variable.
             else:
                 # Fallback to online photo if no local photo for this checkpoint
                 photo_html = get_photo_html(point[0], point[1])
-
-            # Attempt to get a more relevant description for non-photo checkpoints
-            # only if it's not start/finish or a photo checkpoint
-            if not photo_info and i != 0 and i != len(sorted_indices) - 1:
-                closest_original_idx = min(range(len(route.points)), key=lambda x: GeoPoint(route.points[x].lat, route.points[x].lon).distance_to(GeoPoint(*point)))
-                description = route.descriptions[closest_original_idx] if closest_original_idx < len(route.descriptions) else ""
-
 
             checkpoint = {
                 'point_index': idx,
@@ -364,40 +391,61 @@ class RouteManager():
         return segments
 
     def _create_smooth_route(self, route: Route):
+        # Thresholds for interpolation method selection
+        MIN_POINTS_FOR_LINEAR = 50     # Use linear if ≥50 points
+        MAX_DISTANCE_FOR_LINEAR = 10.0 # Use linear if avg spacing <10m
+        
         if len(route.points) < 4:
-            print_step("Процессинг", f"Сглаживание маршрута '{route.name}': Менее 4 точек. Возвращаю необработанные точки.")
+            print_step("Smoothing", f"Route '{route.name}': <4 points, returning raw points")
             return [(p.lat, p.lon) for p in route.points], route.elevations
 
         points = np.array([(p.lat, p.lon) for p in route.points])
         elevations = np.array(route.elevations)
 
+        # Calculate cumulative distances and average spacing
         distances = np.zeros(len(points))
         for i in range(1, len(points)):
             p1 = GeoPoint(points[i-1][0], points[i-1][1])
             p2 = GeoPoint(points[i][0], points[i][1])
             distances[i] = distances[i-1] + p1.distance_to(p2)
+        
+        avg_distance = distances[-1] / (len(points) - 1) if len(points) > 1 else 0
+        
+        # Determine interpolation method
+        use_linear = (len(points) >= MIN_POINTS_FOR_LINEAR and 
+                    avg_distance <= MAX_DISTANCE_FOR_LINEAR)
+        
+        method = "linear" if use_linear else "Akima"
+        print_step("Smoothing", 
+                f"Route '{route.name}': {len(points)} points, "
+                f"avg spacing {avg_distance:.1f}m → {method} interpolation")
 
         if distances[-1] == 0:
-            print_step("Процессинг", f"Сглаживание маршрута '{route.name}': Нулевая длина маршрута. Возвращаю необработанные точки.")
             return [(p.lat, p.lon) for p in route.points], route.elevations
 
+        # Normalized distance parameter (0-1)
         t = distances / distances[-1]
-
         num_smooth_points = max(100, int(distances[-1] / 10))
         t_smooth = np.linspace(0, 1, num_smooth_points)
 
         try:
-            spline_lat = Akima1DInterpolator(t, points[:, 0])
-            spline_lon = Akima1DInterpolator(t, points[:, 1])
-            spline_elev = Akima1DInterpolator(t, elevations)
+            if use_linear:
+                # Linear interpolation - preserves sharp turns in dense data
+                interp_lat  = interp1d(t, points[:, 0], kind='linear')
+                interp_lon  = interp1d(t, points[:, 1], kind='linear')
+                interp_elev = interp1d(t, elevations, kind='linear')
+            else:
+                # Akima spline - smooths sparse data
+                interp_lat = Akima1DInterpolator(t, points[:, 0])
+                interp_lon = Akima1DInterpolator(t, points[:, 1])
+                interp_elev = Akima1DInterpolator(t, elevations)
 
-            smooth_lats = spline_lat(t_smooth)
-            smooth_lons = spline_lon(t_smooth)
-            smooth_elevs = spline_elev(t_smooth)
-
-            smooth_points = list(zip(smooth_lats, smooth_lons))
-            return smooth_points, smooth_elevs.tolist()
+            smooth_points = list(zip(
+                interp_lat(t_smooth),
+                interp_lon(t_smooth)
+            ))
+            return smooth_points, interp_elev(t_smooth).tolist()
 
         except Exception as e:
-            print_step("Ошибка", f"Не удалось сгладить маршрут {route.name}, возвращаю необработанные точки. Ошибка: {e}")
+            print_step("Error", f"Smoothing failed for {route.name}: {str(e)}")
             return [(p.lat, p.lon) for p in route.points], route.elevations

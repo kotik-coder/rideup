@@ -13,8 +13,16 @@ from flask import send_from_directory
 
 class BitsevskyMapApp:
     def __init__(self):
+        import logging
+        log = logging.getLogger('werkzeug')
+        log.setLevel(logging.ERROR)
+        # Configure Dash to be quieter
         self.app = dash.Dash(__name__,
-                             external_stylesheets=[dbc.themes.BOOTSTRAP])
+                            external_stylesheets=[dbc.themes.BOOTSTRAP],
+                            suppress_callback_exceptions=True)
+        
+        # Disable Dash devtools verbose logging
+        self.app.logger.setLevel(logging.WARNING)    
 
         local_photos_dir = os.path.join(os.path.dirname(__file__), 'local_photos')
         print(f"DEBUG: local_photos_dir is set to: {local_photos_dir}") # <--- ADD THIS LINE FOR DEBUGGING
@@ -187,8 +195,8 @@ class BitsevskyMapApp:
             State('map-graph', 'figure')
         )
         def update_map_figure(route_index, checkpoint_index, route_data_json, current_figure):
-            """Draws all routes and correctly zooms to the selected one."""
-            fig = go.Figure(current_figure) 
+            """Draws all routes and correctly zooms based on selection changes."""
+            fig = go.Figure(current_figure)
 
             if not route_data_json:
                 print_step("Callback", "update_map_figure: route_data_json is empty, returning current figure.")
@@ -196,6 +204,41 @@ class BitsevskyMapApp:
 
             route_data = json.loads(route_data_json)
             print_step("Callback", f"update_map_figure: Processing with {len(route_data)} routes.")
+
+            triggered_id = dash.callback_context.triggered[0]['prop_id'].split('.')[0] if dash.callback_context.triggered else None
+
+            # Ensure fig.layout.meta exists and is a dictionary for storing custom state
+            # plotly.graph_objects.layout.Layout objects allow direct attribute assignment
+            if not hasattr(fig.layout, 'meta') or not isinstance(fig.layout.meta, dict):
+                fig.layout.meta = {}
+            
+            # Get the route index that the map was previously centered on
+            prev_centered_route_index = fig.layout.meta.get('last_centered_route_index', None)
+
+            # Decide if map center/zoom should be updated
+            should_update_center_and_zoom = False
+            current_centered_route_index = None # To store the index we *will* center on, if recentering occurs
+
+            if triggered_id is None: # Initial load
+                should_update_center_and_zoom = True
+                current_centered_route_index = route_index # Will be None if no default route
+                print_step("Callback", "Initial load, updating map center and zoom.")
+            elif triggered_id == 'selected-route-index':
+                # Map should re-center only if the selected route index is *different* from the one the map is currently centered on
+                if route_index != prev_centered_route_index:
+                    should_update_center_and_zoom = True
+                    current_centered_route_index = route_index
+                    print_step("Callback", "New route selected (or route deselected), updating map center and zoom.")
+                else:
+                    # Route selected, but it's the same route the map is already centered on
+                    print_step("Callback", "Same route re-selected, maintaining current map center and zoom.")
+            elif triggered_id == 'selected-checkpoint-index':
+                # Checkpoint selected, do NOT change map center/zoom
+                should_update_center_and_zoom = False
+                print_step("Callback", "Checkpoint selected, maintaining current map center and zoom.")
+            # For other triggers (e.g., map click not leading to a new route/checkpoint selection),
+            # should_update_center_and_zoom remains False, preserving the current map view.
+
 
             # Clear existing traces to redraw
             fig.data = []
@@ -205,33 +248,40 @@ class BitsevskyMapApp:
                 fig.update_layout(map_style="open-street-map")
 
             # --- Logic for zooming to the selected route or back to forest bounds ---
-            if route_index is not None and route_index < len(route_data):
-                selected_route = route_data[route_index]
-                if selected_route['smooth_points']:
-                    lats = [p[0] for p in selected_route['smooth_points']]
-                    lons = [p[1] for p in selected_route['smooth_points']]
-                    
-                    center_lat = (min(lats) + max(lats)) / 2
-                    center_lon = (min(lons) + max(lons)) / 2
-                    zoom = self._calculate_zoom(lats, lons)
-                    
+            if should_update_center_and_zoom:
+                if current_centered_route_index is not None and current_centered_route_index < len(route_data):
+                    selected_route = route_data[current_centered_route_index]
+                    if selected_route['smooth_points']:
+                        lats = [p[0] for p in selected_route['smooth_points']]
+                        lons = [p[1] for p in selected_route['smooth_points']]
+
+                        center_lat = (min(lats) + max(lats)) / 2
+                        center_lon = (min(lons) + max(lons)) / 2
+                        zoom = self._calculate_zoom(lats, lons)
+
+                        fig.update_layout(
+                            map_center={'lat': center_lat, 'lon': center_lon},
+                            map_zoom=zoom
+                        )
+                        print_step("Callback", f"Zooming to selected route: {selected_route['name']}")
+                else: # No route selected (current_centered_route_index is None), zoom to forest bounds
+                    min_lon_val, min_lat_val, max_lon_val, max_lat_val = self.rm.bounds
+                    center_lat = (min_lat_val + max_lat_val) / 2
+                    center_lon = (min_lon_val + max_lon_val) / 2
+                    zoom = self._calculate_zoom([min_lat_val, max_lat_val], [min_lon_val, max_lon_val])
                     fig.update_layout(
                         map_center={'lat': center_lat, 'lon': center_lon},
                         map_zoom=zoom
                     )
-                    print_step("Callback", f"Zooming to selected route: {selected_route['name']}")
+                    self._add_forest_boundary_and_name_to_figure(fig)
+                    print_step("Callback", "Zooming to forest bounds (no route selected).")
+
+                # Store the route index that the map was just centered on for future comparisons
+                fig.layout.meta['last_centered_route_index'] = current_centered_route_index
             else:
-                # If no route is selected, zoom to the entire forest area
-                min_lon_val, min_lat_val, max_lon_val, max_lat_val = self.rm.bounds 
-                center_lat = (min_lat_val + max_lat_val) / 2 
-                center_lon = (min_lon_val + max_lon_val) / 2
-                zoom = self._calculate_zoom([min_lat_val, max_lat_val], [min_lon_val, max_lon_val])
-                fig.update_layout(
-                    map_center={'lat': center_lat, 'lon': center_lon},
-                    map_zoom=zoom
-                )
-                self._add_forest_boundary_and_name_to_figure(fig)
-                print_step("Callback", "Zooming to forest bounds (no route selected).")
+                # If not recentering, the map's center/zoom is implicitly preserved
+                # by creating `fig = go.Figure(current_figure)`.
+                pass
 
 
             # Drawing all routes
@@ -240,18 +290,18 @@ class BitsevskyMapApp:
                 if i != route_index:
                     self._add_route_to_figure(fig, route_dict, is_selected=False)
                     print_step("Callback", f"Added non-selected route: {route_dict['name']}")
-            
+
             # Add the selected route last to ensure it's on top
             if route_index is not None and route_index < len(route_data):
                 selected_route_dict = route_data[route_index]
                 self._add_route_to_figure(
-                    fig, 
-                    selected_route_dict, 
+                    fig,
+                    selected_route_dict,
                     is_selected=True,
                     highlight_checkpoint=checkpoint_index
                 )
                 print_step("Callback", f"Added selected route: {selected_route_dict['name']}")
-                
+
             return fig
 
         @self.app.callback(

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple, List
 import atexit
 import re
+from datetime import datetime, timezone
 
 # Импортируем Pillow для обработки изображений и piexif для EXIF
 from PIL import Image
@@ -100,26 +101,57 @@ def get_exif_geolocation(image_path: Path) -> Optional[Tuple[float, float]]:
             
             return latitude, longitude
     except Exception as e:
-        # print(f"Ошибка при чтении EXIF или геоданных из {image_path}: {e}")
         pass
     return None
+
+def get_photo_timestamp(image_path: Path) -> Optional[datetime]:
+    """Извлекает временную метку создания фото из EXIF данных и конвертирует в UTC."""
+    try:
+        img = Image.open(image_path)
+        exif_dict = piexif.load(img.info.get('exif', b''))
+        
+        # Check ExifIFD first (where DateTimeOriginal usually is)
+        if piexif.ExifIFD.DateTimeOriginal in exif_dict.get('Exif', {}):
+            dt_str = exif_dict['Exif'][piexif.ExifIFD.DateTimeOriginal].decode('utf-8')
+        elif piexif.ExifIFD.DateTimeDigitized in exif_dict.get('Exif', {}):
+            dt_str = exif_dict['Exif'][piexif.ExifIFD.DateTimeDigitized].decode('utf-8')
+        elif piexif.ImageIFD.DateTime in exif_dict.get('0th', {}):
+            dt_str = exif_dict['0th'][piexif.ImageIFD.DateTime].decode('utf-8')
+        else:
+            return None
+
+        # EXIF timestamp format is "YYYY:MM:DD HH:MM:SS" (local time)
+        dt_obj = datetime.strptime(dt_str, "%Y:%m:%d %H:%M:%S")
+        
+        # Assume the timestamp is in local time and convert to UTC
+        # Note: This assumes the local timezone matches the system timezone
+        # For more precise handling, you might need to get the timezone from EXIF
+        return dt_obj.astimezone(timezone.utc)
+        
+    except Exception:
+        return None
 
 def get_photos_with_geolocation_from_folder(folder_path: Path) -> List[Dict[str, any]]:
     """
     Сканирует указанную папку на наличие изображений (jpg, jpeg, png)
-    и извлекает из них географические координаты EXIF.
-    Возвращает список словарей, каждый из которых содержит 'path' и 'coords'.
+    и извлекает из них географические координаты EXIF и временные метки.
+    Возвращает список словарей, каждый из которых содержит:
+    - 'path': путь к файлу
+    - 'coords': (latitude, longitude) или None
+    - 'timestamp': datetime объекта или None
     """
-    photos_with_coords = []
+    photos_with_metadata = []
     for ext in ['*.jpg', '*.jpeg', '*.png']:
         for image_path in folder_path.glob(ext):
-            coords = get_exif_geolocation(image_path)
-            if coords:
-                photos_with_coords.append({
+            try:
+                photos_with_metadata.append({
                     'path': str(image_path),
-                    'coords': coords  # (latitude, longitude)
+                    'coords': get_exif_geolocation(image_path),
+                    'timestamp': get_photo_timestamp(image_path)
                 })
-    return photos_with_coords
+            except Exception:
+                continue
+    return photos_with_metadata
 
 
 def get_landscape_photo(lat: float, lon: float) -> Tuple[Optional[str], str]:

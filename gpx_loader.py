@@ -1,11 +1,9 @@
 import gpxpy
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
-from dataclasses import dataclass
-import math
-from datetime import datetime
+from typing import List, Dict, Optional
+from datetime import datetime, timedelta
 from route import *
-from map_helpers import print_step
+from map_helpers import print_step, safe_get_elevation
 
 # Настройки
 GPX_DIR = Path("local_routes")  # Папка с маршрутами
@@ -34,8 +32,10 @@ class LocalGPXLoader:
             metadata["desc"] = gpx.tracks[0].description
             
         if gpx.time:
-            metadata["time"] = gpx.time.isoformat()
-            
+            if gpx.time.tzinfo is None:
+                metadata["time"] = gpx.time.replace(tzinfo=timezone.utc)
+            else:
+                metadata["time"] = gpx.time
         return metadata
 
     def load_routes(self) -> List[Route]:
@@ -46,32 +46,67 @@ class LocalGPXLoader:
             try:
                 with open(gpx_file, 'r', encoding='utf-8') as f:
                     gpx = gpxpy.parse(f)
-                    metadata = self._extract_metadata(gpx)
-                    
-                    points: List[GeoPoint] = [] # Изменено: теперь список GeoPoint
-                    elevations: List[float] = []
-                    descriptions: List[str] = []
+                
+                metadata = self._extract_metadata(gpx)
+                points = []
+                elevations = []
+                descriptions = []
 
-                    for track in gpx.tracks:
-                        for segment in track.segments:
-                            for point in segment.points:
-                                # Изменено: Создаем объект GeoPoint
-                                points.append(GeoPoint(point.latitude, point.longitude)) 
-                                elevations.append(point.elevation or 0)
-                                desc = f"{metadata['name']} - {point.time}" if point.time else metadata['name']
-                                descriptions.append(desc)
-                    
-                    if not points:
-                        print_step("GPX", f"Файл {gpx_file.name} не содержит точек и будет пропущен.")
-                        continue
+                start_time_route = None
+                end_time_route = None
+                
+                for track in gpx.tracks:
+                    for segment in track.segments:
+                        for i, point in enumerate(segment.points):
+                            point_time = point.time
+                            if point_time:
+                                # Convert to UTC if it has timezone, otherwise assume UTC
+                                if point_time.tzinfo is None:
+                                    point_time = point_time.replace(tzinfo=timezone.utc)
+                                else:
+                                    point_time = point_time.astimezone(timezone.utc)
 
-                    route = Route(
-                        name=metadata['name'],
-                        points=points,
-                        elevations=elevations,
-                        descriptions=descriptions
-                    )
-                    routes.append(route)
+                            if i == 0:
+                                if not start_time_route:
+                                    start_time_route = point_time
+                                elapsed_seconds = 0.0
+                            else:
+                                if start_time_route and point_time:
+                                    elapsed_seconds = (point_time - start_time_route).total_seconds()
+                                else:
+                                    print_step("GPX", f"Внимание: Отсутствует время для точки {point.latitude}, {point.longitude}. Точка будет пропущена.", level="WARNING")
+                                    continue
+
+                            gp = GeoPoint(
+                                lat=point.latitude,
+                                lon=point.longitude,
+                                time=point_time,
+                                elapsed_seconds=elapsed_seconds
+                            )
+                            points.append(gp)
+                            elevations.append(point.elevation if point.elevation else safe_get_elevation(point.latitude, point.longitude))
+                            descriptions.append(point.description if point.description else "")
+                            end_time_route = point_time
+
+                if not points:
+                    print_step("GPX", f"В файле {gpx_file.name} не найдено валидных точек и будет пропущен.")
+                    continue
+
+                # Ensure start and end times are in UTC
+                if start_time_route and start_time_route.tzinfo is None:
+                    start_time_route = start_time_route.replace(tzinfo=timezone.utc)
+                if end_time_route and end_time_route.tzinfo is None:
+                    end_time_route = end_time_route.replace(tzinfo=timezone.utc)
+
+                route = Route(
+                    name=metadata['name'],
+                    points=points,
+                    elevations=elevations,
+                    descriptions=descriptions,
+                    start_time=start_time_route,
+                    end_time=end_time_route
+                )
+                routes.append(route)
                         
             except Exception as e:
                 print_step("GPX", f"Ошибка обработки {gpx_file.name}: {e}")
@@ -85,12 +120,14 @@ if __name__ == "__main__":
     if routes:
         print("\nЗагруженные маршруты:")
         for i, route in enumerate(routes, 1):
-            print(f"{i}. {route.name}") # Доступ к имени через .name
+            print(f"{i}. {route.name}")
             print(f"   Точек: {len(route.points)}")
-            # Проверяем, что это GeoPoint
             if route.points:
                 print(f"   Первая точка: ({route.points[0].lat}, {route.points[0].lon})")
+                print(f"   Время старта: {route.start_time}")
                 print(f"   Последняя точка: ({route.points[-1].lat}, {route.points[-1].lon})")
+                print(f"   Время финиша: {route.end_time}")
+                print(f"   Длительность: {timedelta(seconds=route.points[-1].elapsed_seconds)}")
             else:
                 print("   Точек нет.")
     else:

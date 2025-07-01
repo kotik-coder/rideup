@@ -1,19 +1,29 @@
-from typing import List, Dict
+from typing import List, Dict, Optional
 from dataclasses import dataclass
 import math
+from datetime import datetime, timezone
 
 MAX_DISTANCE_KM = 3.0
 
-#@dataclass
+@dataclass
 class GeoPoint:
-    lat : float
-    lon : float
+    lat: float
+    lon: float
+    elapsed_seconds: float = 0.0     # Seconds from route start
     
-    def __init__(self, lat, lon): 
+    def __init__(self, lat, lon, time=None, elapsed_seconds=0.0): 
         self.lat = lat
         self.lon = lon
+        if isinstance(time, datetime):
+            if time.tzinfo is None:
+                self.time = time.replace(tzinfo=timezone.utc)
+            else:
+                self.time = time.astimezone(timezone.utc)
+        else:
+            self.time = None
+        self.elapsed_seconds = elapsed_seconds
 
-    def distance_to(self, point : "GeoPoint"):
+    def distance_to(self, point: "GeoPoint"):
         """Вычисляет расстояние между двумя точками в метрах (упрощенная формула)"""
         lat2, lon2 = point.lat, point.lon
         return math.sqrt((lat2-self.lat)**2 + (lon2-self.lon)**2) * 111320  # Примерно 111 км на градус
@@ -71,10 +81,28 @@ class GeoPoint:
 @dataclass
 class Route:
     name: str
-    points: List[GeoPoint]  # (lat, lon)
+    points: List[GeoPoint]
     elevations: List[float]
     descriptions: List[str]
-    source: str = "local"
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+
+    def __post_init__(self):
+        if self.start_time:
+            if self.start_time.tzinfo is None:
+                self.start_time = self.start_time.replace(tzinfo=timezone.utc)
+            else:
+                self.start_time = self.start_time.astimezone(timezone.utc)
+        elif self.points:
+            self.start_time = self.points[0].time
+            
+        if self.end_time:
+            if self.end_time.tzinfo is None:
+                self.end_time = self.end_time.replace(tzinfo=timezone.utc)
+            else:
+                self.end_time = self.end_time.astimezone(timezone.utc)
+        elif self.points:
+            self.end_time = self.points[-1].time
 
     def to_map_format(self) -> Dict:
         return {
@@ -85,7 +113,10 @@ class Route:
             "metadata": {
                 "name": self.name,
                 "source": self.source,
-                "url": ""
+                "url": "",
+                "start_time": self.start_time.isoformat() if self.start_time else None,
+                "end_time": self.end_time.isoformat() if self.end_time else None,
+                "duration_seconds": self.points[-1].elapsed_seconds if self.points else 0
             }
         }
 
