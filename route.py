@@ -13,8 +13,21 @@ class GeoPoint:
     elevation: float = 0.0
 
     def distance_to(self, point: "GeoPoint"):
-        lat2, lon2 = point.lat, point.lon
-        return math.sqrt((lat2-self.lat)**2 + (lon2-self.lon)**2) * 111320  # Примерно 111 км на градус
+        R = 6371000 # Radius of Earth in meters
+        
+        lat1_rad = math.radians(self.lat)
+        lon1_rad = math.radians(self.lon)
+        lat2_rad = math.radians(point.lat)
+        lon2_rad = math.radians(point.lon)
+
+        dlat = lat2_rad - lat1_rad
+        dlon = lon2_rad - lon1_rad
+
+        a = math.sin(dlat / 2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2)**2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+        distance = R * c
+        return distance # Distance in meters
     
     def bearing_to(self, other_point: "GeoPoint") -> float:
         """
