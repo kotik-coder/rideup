@@ -1,9 +1,10 @@
 import gpxpy
 from pathlib import Path
-from typing import List, Dict, Optional
-from datetime import datetime, timedelta
-from route import *
+from typing import List, Dict, Optional, Tuple
+from datetime import datetime, timedelta, timezone
+from route import Route, GeoPoint # Modified import: specify classes from route
 from map_helpers import print_step, safe_get_elevation
+from track import Track, TrackPoint
 
 # Настройки
 GPX_DIR = Path("local_routes")  # Папка с маршрутами
@@ -38,98 +39,54 @@ class LocalGPXLoader:
                 metadata["time"] = gpx.time
         return metadata
 
-    def load_routes(self) -> List[Route]:
-        """Загружает все валидные маршруты из локальной папки"""
-        print_step("GPX", f"Поиск GPX-файлов в {GPX_DIR}")
-        routes = []
-        for gpx_file in GPX_DIR.glob("*.gpx"):
-            try:
-                with open(gpx_file, 'r', encoding='utf-8') as f:
-                    gpx = gpxpy.parse(f)
+    def load_routes_and_tracks(self, gpx_path: Path) -> List[Tuple[Route, List[Track]]]: # Modified return type
+        results: List[Tuple[Route, List[Track]]] = [] # List to store (Route, List[Track]) tuples
+        with open(gpx_path, 'r') as gpx_file:
+            gpx = gpxpy.parse(gpx_file)
+
+        for track_gpx in gpx.tracks: # 'track_gpx' refers to gpxpy.gpx.GPXTrack
+            current_route_points = []
+            current_elevations = []
+            current_descriptions = []
+            current_tracks_for_route: List[Track] = [] # To collect Track objects for this specific Route
+
+            for segment in track_gpx.segments:
+                # Collect data for the Route object
+                for pt in segment.points:
+                    current_route_points.append(GeoPoint(pt.latitude, pt.longitude, pt.elevation or 0))
+                    current_elevations.append(pt.elevation or 0)
+                    current_descriptions.append(pt.description or "")
+                    
+                # Create Track object from segment points
+                track_points_for_segment = []
+                # Ensure segment.points is not empty before accessing index 0
+                start_time = self._ensure_utc(segment.points[0].time) if segment.points and segment.points[0].time else None
                 
-                metadata = self._extract_metadata(gpx)
-                points = []
-                elevations = []
-                descriptions = []
-
-                start_time_route = None
-                end_time_route = None
+                for pt in segment.points:
+                    timestamp = self._ensure_utc(pt.time)
+                    # Handle cases where start_time might be None (e.g., if first point has no time)
+                    elapsed = (timestamp - start_time).total_seconds() if start_time and timestamp else 0
+                    track_points_for_segment.append(TrackPoint(
+                        point=GeoPoint(pt.latitude, pt.longitude, pt.elevation or 0),
+                        timestamp=timestamp,
+                        elapsed_seconds=elapsed
+                    ))
                 
-                for track in gpx.tracks:
-                    for segment in track.segments:
-                        for i, point in enumerate(segment.points):
-                            point_time = point.time
-                            if point_time:
-                                # Convert to UTC if it has timezone, otherwise assume UTC
-                                if point_time.tzinfo is None:
-                                    point_time = point_time.replace(tzinfo=timezone.utc)
-                                else:
-                                    point_time = point_time.astimezone(timezone.utc)
-
-                            if i == 0:
-                                if not start_time_route:
-                                    start_time_route = point_time
-                                elapsed_seconds = 0.0
-                            else:
-                                if start_time_route and point_time:
-                                    elapsed_seconds = (point_time - start_time_route).total_seconds()
-                                else:
-                                    print_step("GPX", f"Внимание: Отсутствует время для точки {point.latitude}, {point.longitude}. Точка будет пропущена.", level="WARNING")
-                                    continue
-
-                            gp = GeoPoint(
-                                lat=point.latitude,
-                                lon=point.longitude,
-                                time=point_time,
-                                elapsed_seconds=elapsed_seconds
-                            )
-                            points.append(gp)
-                            elevations.append(point.elevation if point.elevation else safe_get_elevation(point.latitude, point.longitude))
-                            descriptions.append(point.description if point.description else "")
-                            end_time_route = point_time
-
-                if not points:
-                    print_step("GPX", f"В файле {gpx_file.name} не найдено валидных точек и будет пропущен.")
-                    continue
-
-                # Ensure start and end times are in UTC
-                if start_time_route and start_time_route.tzinfo is None:
-                    start_time_route = start_time_route.replace(tzinfo=timezone.utc)
-                if end_time_route and end_time_route.tzinfo is None:
-                    end_time_route = end_time_route.replace(tzinfo=timezone.utc)
-
-                route = Route(
-                    name=metadata['name'],
-                    points=points,
-                    elevations=elevations,
-                    descriptions=descriptions,
-                    start_time=start_time_route,
-                    end_time=end_time_route
+                if track_points_for_segment:
+                    current_tracks_for_route.append(Track(track_points_for_segment)) # Add to the list for this Route
+            
+            if current_route_points:
+                route_obj = Route(
+                    name=track_gpx.name or gpx_path.stem, # Use gpx_path.stem as fallback if gpx.track.name is None
+                    points=current_route_points,
+                    elevations=current_elevations,
+                    descriptions=current_descriptions
                 )
-                routes.append(route)
-                        
-            except Exception as e:
-                print_step("GPX", f"Ошибка обработки {gpx_file.name}: {e}")
-        
-        return routes
+                results.append((route_obj, current_tracks_for_route)) # Append the (Route, List[Track]) tuple
 
-if __name__ == "__main__":
-    loader = LocalGPXLoader()
-    routes = loader.load_routes()
-    
-    if routes:
-        print("\nЗагруженные маршруты:")
-        for i, route in enumerate(routes, 1):
-            print(f"{i}. {route.name}")
-            print(f"   Точек: {len(route.points)}")
-            if route.points:
-                print(f"   Первая точка: ({route.points[0].lat}, {route.points[0].lon})")
-                print(f"   Время старта: {route.start_time}")
-                print(f"   Последняя точка: ({route.points[-1].lat}, {route.points[-1].lon})")
-                print(f"   Время финиша: {route.end_time}")
-                print(f"   Длительность: {timedelta(seconds=route.points[-1].elapsed_seconds)}")
-            else:
-                print("   Точек нет.")
-    else:
-        print("Не найдено ни одного подходящего маршрута")
-        print(f"Поместите GPX-файлы в папку {GPX_DIR}")
+        return results
+
+    def _ensure_utc(self, dt: Optional[datetime]) -> Optional[datetime]:
+        if dt and dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt

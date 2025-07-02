@@ -253,10 +253,9 @@ def get_photo_html(lat: float, lon: float, local_photo_path: Optional[str] = Non
     source = ""
 
     if local_photo_path:
-        # Assuming local_photos folder is served as /static/local_photos/
-        # Extract just the filename from the path
         filename = Path(local_photo_path).name
-        photo_url = f"/static/local_photos/{filename}"
+        # *** CHANGE THIS LINE ***
+        photo_url = f"/local_photos/{filename}" # REMOVED '/static/'
         source = "Локальное фото"
     else:
         photo_url, source = get_landscape_photo(lat, lon)

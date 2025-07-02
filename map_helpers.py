@@ -176,30 +176,58 @@ def get_boundary_near_point(polygon: Polygon, bounds: List[float], reference_poi
     return get_boundary_point(polygon, bounds)
 
 
-def get_landscape_description(elevation: float, delta: float) -> str:
-    """Описание ландшафта на основе высоты и перепада"""
-    elevation = float(elevation)
-    delta = float(delta)
+
+def get_landscape_description(
+    current_elevation: float,
+    segment_net_elevation_change: float,
+    segment_elevation_gain: float,
+    segment_elevation_loss: float,
+    segment_distance: float
+) -> str:
+    """
+    Описание ландшафта на основе текущей высоты и характеристик сегмента.
     
+    Args:
+        current_elevation: Текущая высота в точке чекпоинта.
+        segment_net_elevation_change: Чистое изменение высоты по сегменту (конец - начало).
+        segment_elevation_gain: Общий набор высоты по сегменту.
+        segment_elevation_loss: Общий спуск высоты по сегменту.
+        segment_distance: Длина сегмента в метрах.
+    """
     desc = ""
-    if elevation < 100:
+    
+    # 1. Общее описание высоты точки
+    if current_elevation < 100:
         desc += "Низменность. "
-    elif 100 <= elevation < 200:
+    elif 100 <= current_elevation < 200:
         desc += "Равнинная местность. "
     else:
         desc += "Возвышенность. "
 
-    if delta > 10:
-        desc += "Значительный подъем."
-    elif delta < -10:
-        desc += "Значительный спуск."
-    elif 3 <= delta <= 10:
-        desc += "Легкий подъем."
-    elif -10 <= delta <= -3:
-        desc += "Легкий спуск."
+    # 2. Описание перепада высот по сегменту
+    if segment_distance > 0: # Avoid division by zero
+        # Consider average gradient for more nuanced description
+        avg_gradient_gain = (segment_elevation_gain / segment_distance) * 100 if segment_distance > 0 else 0
+        avg_gradient_loss = (segment_elevation_loss / segment_distance) * 100 if segment_distance > 0 else 0
+
+        # Heuristics for "ravines" or "undulating"
+        # If both gain and loss are significant relative to segment length and net change
+        if segment_elevation_gain > 15 and segment_elevation_loss > 15 and \
+           abs(segment_net_elevation_change) < (segment_elevation_gain + segment_elevation_loss) * 0.5:
+            desc += "Пересеченная местность с оврагами или чередованием подъемов и спусков. "
+        elif segment_elevation_gain > 20:
+            desc += "Значительный подъем. "
+        elif segment_elevation_loss > 20:
+            desc += "Значительный спуск. "
+        elif segment_net_elevation_change > 5:
+            desc += "Легкий подъем. "
+        elif segment_net_elevation_change < -5:
+            desc += "Легкий спуск. "
+        else:
+            desc += "Пологий участок. "
     else:
-        desc += "Пологий участок."
-    
+        desc += "Короткий, ровный участок. "
+            
     return desc
 
 def point_to_segment_projection_and_distance(

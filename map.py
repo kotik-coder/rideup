@@ -75,7 +75,6 @@ class BitsevskyMapApp:
         
         return fig
 
-
     def _setup_layout(self):
         self.app.layout = dbc.Container([
             dbc.Row([
@@ -101,8 +100,7 @@ class BitsevskyMapApp:
                     dbc.Card([
                         dbc.CardHeader("Информация о маршруте", className="font-weight-bold"),
                         dbc.CardBody([
-                            html.Div(id='route-general-info'),
-                            dcc.Graph(id='elevation-profile', style={'height': '250px'})
+                            html.Div(id='route-general-info')
                         ])
                     ], className="mb-3"),
                     dbc.Card([
@@ -111,6 +109,14 @@ class BitsevskyMapApp:
                     ])
                 ], width=4, style={'padding': '0 15px'})
             ], style={'margin': '0'}),
+            dbc.Row([ # New Row for graphs to occupy full width below the main map and info panel
+                dbc.Col([
+                    dcc.Graph(id='elevation-profile', style={'height': '250px'}),
+                ], width=6), # Half width for elevation
+                dbc.Col([
+                    dcc.Graph(id='velocity-profile', style={'height': '250px'}) # Half width for velocity
+                ], width=6)
+            ], style={'margin': '0', 'marginTop': '15px'}), # Added margin-top for spacing
             dcc.Store(id='route-data-store'),
             dcc.Store(id='selected-route-index'),
             dcc.Store(id='selected-checkpoint-index'),
@@ -128,9 +134,13 @@ class BitsevskyMapApp:
             print_step("Callback", "Загружаю начальные данные маршрутов...")
             route_data = []
             options = []
-            if self.rm.valid_routes:
-                print_step("Callback", f"Найдено {len(self.rm.valid_routes)} маршрутов для обработки.")
-                for i, route in enumerate(self.rm.valid_routes):
+            # Make sure rm.routes are loaded from gpx files.
+            # self.rm.load_valid_routes() is missing from the original init
+            # so adding it here to ensure data is loaded before processing
+            self.rm.load_valid_routes() 
+            if self.rm.routes: # changed from self.rm.valid_routes to self.rm.routes as per updated route_manager
+                print_step("Callback", f"Найдено {len(self.rm.routes)} маршрутов для обработки.")
+                for i, route in enumerate(self.rm.routes):
                     try:
                         route_dict = self.rm._process_route(route)
                         # --- Crucial check to ensure processed data is valid ---
@@ -375,157 +385,139 @@ class BitsevskyMapApp:
         @self.app.callback(
             Output('route-general-info', 'children'),
             Output('elevation-profile', 'figure'),
+            Output('velocity-profile', 'figure'),
+            Input('selected-route-index', 'data'),
+            Input('selected-checkpoint-index', 'data'), # Added to trigger graph updates on checkpoint selection
+            State('route-data-store', 'data')
+        )
+        def update_all_info(route_index, checkpoint_index, route_data_json):
+            if route_index is None or not route_data_json:
+                empty_elevation_fig = go.Figure().update_layout(title="Профиль высот", xaxis_title="Расстояние (м)", yaxis_title="Высота (м)", margin=dict(l=20, r=20, t=40, b=20), height=250)
+                empty_velocity_fig = go.Figure().update_layout(title="Профиль скорости", xaxis_title="Расстояние (м)", yaxis_title="Скорость (м/с)", margin=dict(l=20, r=20, t=40, b=20), height=250)
+                return html.Div("Выберите маршрут для просмотра информации."), empty_elevation_fig, empty_velocity_fig
+
+            route_data = json.loads(route_data_json)
+            route = route_data[route_index]
+
+            # Route General Info
+            general_info = html.Div([
+                html.H4(route['name']),
+                html.P(f"Длина маршрута: {route['elevation_profile'][-1]['distance']:.2f} м"),
+                html.P(f"Средняя высота: {np.mean([p['elevation'] for p in route['elevation_profile']]):.1f} м"),
+                html.P(f"Набор высоты: {sum(s['elevation_gain'] for s in route['segments']):.1f} м"),
+                html.P(f"Потеря высоты: {sum(s['elevation_loss'] for s in route['segments']):.1f} м"),
+            ])
+
+            # Elevation Profile
+            distances = [p['distance'] for p in route['elevation_profile']]
+            elevations = [p['elevation'] for p in route['elevation_profile']]
+            
+            elevation_fig = go.Figure()
+            elevation_fig.add_trace(go.Scatter(x=distances, y=elevations, mode='lines', name='Высота', line_color='blue'))
+            
+            # Median fill logic
+            if elevations:
+                median_elevation = np.median(elevations)
+                red_polygons, green_polygons = get_fill_polygons(distances, elevations, median_elevation)
+                for poly_coords in red_polygons:
+                    if poly_coords:
+                        x_coords = [p[0] for p in poly_coords]
+                        y_coords = [p[1] for p in poly_coords]
+                        elevation_fig.add_trace(go.Scatter(
+                            x=x_coords, y=y_coords,
+                            fill='toself', fillcolor='rgba(255, 0, 0, 0.3)',
+                            mode='none', showlegend=False, name='Выше медианы'
+                        ))
+                for poly_coords in green_polygons:
+                    if poly_coords:
+                        x_coords = [p[0] for p in poly_coords]
+                        y_coords = [p[1] for p in poly_coords]
+                        elevation_fig.add_trace(go.Scatter(
+                            x=x_coords, y=y_coords,
+                            fill='toself', fillcolor='rgba(0, 255, 0, 0.3)',
+                            mode='none', showlegend=False, name='Ниже медианы'
+                        ))
+
+            # Highlight selected checkpoint on Elevation Profile
+            if checkpoint_index is not None and checkpoint_index < len(route['checkpoints']):
+                selected_cp = route['checkpoints'][checkpoint_index]
+                elevation_fig.add_trace(go.Scatter(
+                    x=[selected_cp['distance_from_start']],
+                    y=[selected_cp['elevation']],
+                    mode='markers',
+                    marker=dict(size=12, color='red', symbol='star'),
+                    name='Выбранный чекпоинт',
+                    hoverinfo='text',
+                    hovertext=f"{selected_cp['name']}<br>Высота: {selected_cp['elevation']:.1f} м"
+                ))
+
+            elevation_fig.update_layout(
+                title='Профиль высот',
+                xaxis_title='Расстояние (м)',
+                yaxis_title='Высота (м)',
+                margin=dict(l=20, r=20, t=40, b=20),
+                height=250
+            )
+
+            # Velocity Profile
+            velocity_profile_data = route.get('velocity_profile', [])
+            velocity_distances = [p['distance'] for p in velocity_profile_data]
+            velocities = [p['velocity'] for p in velocity_profile_data]
+
+            velocity_fig = go.Figure()
+            if velocity_distances and velocities:
+                velocity_fig.add_trace(go.Scatter(x=velocity_distances, y=velocities, mode='lines', name='Скорость', line_color='green'))
+            
+            # Highlight selected checkpoint on Velocity Profile
+            if checkpoint_index is not None and checkpoint_index < len(route['checkpoints']):
+                selected_cp = route['checkpoints'][checkpoint_index]
+                # Find the closest velocity profile point by distance
+                if velocity_profile_data:
+                    closest_velocity_point = min(velocity_profile_data, 
+                                                key=lambda p: abs(p['distance'] - selected_cp['distance_from_start']))
+                    velocity_fig.add_trace(go.Scatter(
+                        x=[closest_velocity_point['distance']],
+                        y=[closest_velocity_point['velocity']],
+                        mode='markers',
+                        marker=dict(size=12, color='red', symbol='star'),
+                        name='Выбранный чекпоинт',
+                        hoverinfo='text',
+                        hovertext=f"{selected_cp['name']}<br>Скорость: {closest_velocity_point['velocity']:.1f} м/с"
+                    ))
+
+            velocity_fig.update_layout(
+                title='Профиль скорости',
+                xaxis_title='Расстояние (м)',
+                yaxis_title='Скорость (м/с)',
+                margin=dict(l=20, r=20, t=40, b=20),
+                height=250
+            )
+
+            return general_info, elevation_fig, velocity_fig
+
+        # NEW CALLBACK FOR CHECKPOINT INFO
+        @self.app.callback(
             Output('checkpoint-info', 'children'),
             Input('selected-route-index', 'data'),
             Input('selected-checkpoint-index', 'data'),
-            State('route-data-store', 'data')
+            State('route-data-store', 'data'),
+            prevent_initial_call=True # Prevent this from firing on initial load before data is ready
         )
-        def update_all_info(selected_route_index, checkpoint_index, route_data_json):
-            """
-            Updates the route general information, elevation profile graph, and checkpoint info
-            based on the selected route and checkpoint.
-            """
-            if selected_route_index is None or not route_data_json:
-                # Return empty state if no route is selected or data is missing
-                empty_fig = go.Figure().update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=250)
-                return "Выберите маршрут", empty_fig, "Выберите чекпоинт на карте"
-                
+        def update_checkpoint_info(route_index, checkpoint_index, route_data_json):
+            if route_index is None or checkpoint_index is None or not route_data_json:
+                return html.Div("Выберите чекпоинт на карте, чтобы увидеть информацию.")
+
             route_data = json.loads(route_data_json)
-            if selected_route_index >= len(route_data):
-                # Handle invalid route index
-                return dash.no_update, dash.no_update, dash.no_update
+            if route_index >= len(route_data):
+                return html.Div("Неверный индекс маршрута.")
 
-            route = route_data[selected_route_index]
+            route = route_data[route_index]
+            if checkpoint_index >= len(route['checkpoints']):
+                return html.Div("Неверный индекс чекпоинта.")
             
-            # Calculate basic statistics for the route
-            total_distance = sum(segment['distance'] for segment in route['segments'])
-            elevations = [ep['elevation'] for ep in route['elevation_profile']]
-            distances = [ep['distance'] for ep in route['elevation_profile']]
-            
-            # Calculate median elevation
-            median_elevation = sorted(elevations)[len(elevations)//2]
-            
-            # Count photo checkpoints
-            photo_checkpoints = sum(1 for cp in route['checkpoints'] if "Фототочка" in cp.get('name', ''))
+            # Call the existing helper method to create the checkpoint card
+            return self._create_checkpoint_card(route['checkpoints'][checkpoint_index])
 
-
-            # Calculate elevation range with padding for better visualization
-            min_elevation = min(elevations)
-            max_elevation = max(elevations)
-            elevation_range = max_elevation - min_elevation
-            ascension  = max_elevation - median_elevation
-            depression = median_elevation - min_elevation
-            y_axis_min = min_elevation - elevation_range * 0.1  # 10% padding below min elevation
-            y_axis_max = max_elevation + elevation_range * 0.1  # 10% padding above max elevation
-
-            # Create the Plotly figure for the elevation profile
-            elevation_fig = go.Figure()
-
-            # Get the polygons for the filled areas (red for above median, green for below median)
-            red_polygons, green_polygons = get_fill_polygons(distances, elevations, median_elevation)
-
-            # Add red filled areas for segments above the median
-            for poly in red_polygons:
-                x_poly = [p[0] for p in poly]
-                y_poly = [p[1] for p in poly]
-                elevation_fig.add_trace(go.Scatter(
-                    x=x_poly,
-                    y=y_poly,
-                    fill='toself', # Fill the defined polygon
-                    fillcolor='rgba(255, 0, 0, 0.3)', # Red with transparency
-                    line=dict(color='rgba(0,0,0,0)'), # Make the polygon boundary line invisible
-                    showlegend=False,
-                    name='Набор высоты (заполнено)',
-                    hoverinfo='none' # Disable hover for fill areas
-                ))
-
-            # Add green filled areas for segments below the median
-            for poly in green_polygons:
-                x_poly = [p[0] for p in poly]
-                y_poly = [p[1] for p in poly]
-                elevation_fig.add_trace(go.Scatter(
-                    x=x_poly,
-                    y=y_poly,
-                    fill='toself', # Fill the defined polygon
-                    fillcolor='rgba(0, 200, 0, 0.3)', # Green with transparency
-                    line=dict(color='rgba(0,0,0,0)'), # Make the polygon boundary line invisible
-                    showlegend=False,
-                    name='Потеря высоты (заполнено)',
-                    hoverinfo='none' # Disable hover for fill areas
-                ))
-
-            # Add the median line as a dashed line
-            elevation_fig.add_shape(
-                type='line',
-                x0=0,
-                y0=median_elevation,
-                x1=distances[-1],
-                y1=median_elevation,
-                line=dict(color='gray', width=1, dash='dash'),
-                name='Медианная высота',
-                layer='below' # Ensure median line is below the main elevation line but above fills
-            )
-
-            # Add the main elevation line
-            elevation_fig.add_trace(go.Scatter(
-                x=distances,
-                y=elevations,
-                mode='lines',
-                line=dict(color='black', width=2),
-                name='Высота',
-                hovertemplate="Расстояние: %{x:.0f} м<br>Высота: %{y:.1f} м<extra></extra>"
-            ))
-
-            # Add checkpoints as markers on the elevation profile
-            for i, checkpoint in enumerate(route['checkpoints']):
-                elevation_fig.add_trace(go.Scatter(
-                    x=[checkpoint['distance_from_start']],
-                    y=[checkpoint['elevation']],
-                    mode='markers',
-                    marker=dict(
-                        size=12,
-                        symbol='circle',
-                        color='yellow' if i == checkpoint_index else 'blue', # Highlight selected checkpoint
-                        line=dict(width=2, color='darkblue')
-                    ),
-                    name=checkpoint['name'],
-                    hoverinfo='text',
-                    hovertext=f"{checkpoint['name']} ({checkpoint['elevation']:.1f} м)"
-                ))
-
-            # Update the layout of the elevation figure
-            elevation_fig.update_layout(
-                margin={"r":20,"t":20,"l":40,"b":40}, # Adjust margins
-                xaxis_title="Расстояние (м)",
-                yaxis_title="Высота (м)",
-                height=250,
-                showlegend=False, # Hide legend for cleaner look
-                hovermode='x unified', # Show unified hover info for x-axis
-                yaxis=dict(
-                    range=[y_axis_min, y_axis_max], # Set y-axis range with padding
-                    tickformat=".0f" # Format y-axis ticks as integers
-                )
-            )
-
-            # Prepare the route general information content
-            info_content = [
-                html.H5(route['name'], className="card-title"),
-                html.P(f"Общая длина: {total_distance:.1f} м"),
-                html.P(f"Фототочек: {photo_checkpoints}"),
-                html.P(f"Медианная высота: {median_elevation:.1f} м"),
-                # Display ascension and depression relative to median with colors
-                html.P(f"Набор высоты (отн. медианы): {ascension:.1f} м", style={'color': 'red'}),
-                html.P(f"Перепад высоты (отн. медианы): {depression:.1f} м", style={'color': 'green'})
-            ]
-
-            # Prepare checkpoint information
-            if checkpoint_index is not None and checkpoint_index < len(route['checkpoints']):
-                checkpoint_info = self._create_checkpoint_card(route['checkpoints'][checkpoint_index])
-            else:
-                checkpoint_info = "Выберите чекпоинт на карте"
-            
-            # Return all updated outputs
-            return info_content, elevation_fig, checkpoint_info
 
     def _calculate_zoom(self, lats, lons):
         """
@@ -790,7 +782,6 @@ class BitsevskyMapApp:
         print_step("Map Drawing", "Добавлены границы и название леса.")
 
     def _create_checkpoint_card(self, checkpoint):
-        # NOTE: get_photo_html is called here. Ensure it's correctly imported and functional.
         return [
             html.H5(f"{checkpoint['name']} ({checkpoint['position']}/{checkpoint['total_positions']})", 
                    className="card-title"),
@@ -800,8 +791,8 @@ class BitsevskyMapApp:
             ),
             html.P(f"Координаты: {checkpoint['lat']:.5f}, {checkpoint['lon']:.5f}"),
             html.P(f"Высота: {checkpoint['elevation']:.1f} м"),
-            html.P(f"Расстояние от старта: {checkpoint.get('distance_from_start', 0):.0f} м"),
-            html.P(checkpoint['description'], className="text-muted")
+            html.P(f"Расстояние от старта: {checkpoint.get('distance_from_start', 0):.1f} м"),
+            html.P(checkpoint['description'], className="card-text")
         ]
 
     def run(self):
