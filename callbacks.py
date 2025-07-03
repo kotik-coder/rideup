@@ -4,15 +4,16 @@ import json
 import numpy as np
 import plotly.graph_objects as go
 from map_helpers import print_step
-from route import GeoPoint # GeoPoint is in route.py
-from map_visualization import add_route_to_figure, calculate_zoom, add_forest_boundary_and_name_to_figure # Import map drawing functions
-from graph_generation import get_fill_polygons, calculate_velocity_quartiles # Import graph data processing
-from ui_components import create_checkpoint_card # Import UI component generation
+from route import GeoPoint
+from map_visualization import *
+from graph_generation import *
+from ui_components import create_checkpoint_card
 
-def setup_callbacks(app, route_manager):
+
+def setup_callbacks(app, spot, spot_loader, route_processor):
     """
     Registers all Dash callbacks with the provided Dash app instance.
-    Requires the RouteManager instance for data loading and processing.
+    Requires the Spot, SpotLoader, and RouteProcessor instances for data processing.
     """
 
     @app.callback(
@@ -25,18 +26,25 @@ def setup_callbacks(app, route_manager):
         print_step("Callback", "Загружаю начальные данные маршрутов...")
         route_data = []
         options = []
-        route_manager.load_valid_routes() # Ensure routes are loaded
-        if route_manager.routes:
-            print_step("Callback", f"Найдено {len(route_manager.routes)} маршрутов для обработки.")
-            for i, route in enumerate(route_manager.routes):
+        
+        # Load routes and tracks through SpotLoader
+        spot_loader.load_valid_routes_and_tracks()
+        
+        # Update RouteProcessor with loaded data
+        route_processor.local_photos = spot.local_photos
+        route_processor.route_to_tracks = spot._route_to_tracks
+        
+        if spot.routes:
+            print_step("Callback", f"Найдено {len(spot.routes)} маршрутов для обработки.")
+            for i, route in enumerate(spot.routes):
                 try:
-                    route_dict = route_manager._process_route(route)
+                    route_dict = route_processor.process_route(route)
                     if route_dict and route_dict.get('smooth_points') and route_dict.get('checkpoints'):
                         route_data.append(route_dict)
                         options.append({'label': route.name, 'value': i})
                         print_step("Callback", f"Маршрут '{route.name}' успешно обработан и добавлен.")
                     else:
-                        print_step("Callback", f"Маршрут '{route.name}' обработан, но данные пусты или неполные (нет smooth_points или checkpoints). Пропускаю.", level="WARN")
+                        print_step("Callback", f"Маршрут '{route.name}' обработан, но данные пусты или неполные. Пропускаю.", level="WARN")
                 except Exception as e:
                     print_step("Callback", f"Ошибка при обработке маршрута '{route.name}': {e}", level="ERROR")
 
@@ -147,16 +155,8 @@ def setup_callbacks(app, route_manager):
                         map_zoom=zoom
                     )
                     print_step("Callback", f"Zooming to selected route: {selected_route['name']}")
-            else:
-                # Need the bounds from route_manager for this, which is outside this callback scope.
-                # This highlights a challenge: how to get route_manager.bounds without passing it
-                # everywhere or making it a global/class member accessed by callbacks.
-                # For now, let's assume route_manager.bounds can be accessed via a shared mechanism
-                # or passed into setup_callbacks if needed.
-                # A simpler approach for this module is to take bounds as an argument to setup_callbacks
-                # if map_visualization needs it directly, or rely on it being part of route_manager
-                # that is passed in.
-                min_lon_val, min_lat_val, max_lon_val, max_lat_val = route_manager.bounds # Access route_manager bounds
+            else:                
+                min_lon_val, min_lat_val, max_lon_val, max_lat_val = spot.bounds # Access route_manager bounds
                 center_lat = (min_lat_val + max_lat_val) / 2
                 center_lon = (min_lon_val + max_lon_val) / 2
                 zoom = calculate_zoom([min_lat_val, max_lat_val], [min_lon_val, max_lon_val])
@@ -164,7 +164,7 @@ def setup_callbacks(app, route_manager):
                     map_center={'lat': center_lat, 'lon': center_lon},
                     map_zoom=zoom
                 )
-                add_forest_boundary_and_name_to_figure(fig, route_manager.bounds) # Use imported function
+                add_forest_boundary_and_name_to_figure(fig, spot.bounds) # Use imported function
                 print_step("Callback", "Zooming to forest bounds (no route selected).")
 
             fig.layout.meta['last_centered_route_index'] = current_centered_route_index
@@ -192,7 +192,6 @@ def setup_callbacks(app, route_manager):
     def sync_route_selector(route_index):
         return route_index
 
-
     @app.callback(
         Output('route-general-info', 'children'),
         Output('elevation-profile', 'figure'),
@@ -206,18 +205,22 @@ def setup_callbacks(app, route_manager):
             'margin': dict(l=20, r=20, t=40, b=20),
             'height': 250,
             'showlegend': False,
-            'hovermode': 'x unified',
-            'title': {
-                'y': 0.9,
-                'x': 0.5,
-                'xanchor': 'center',
-                'yanchor': 'top'
-            }
+            'hovermode': 'x unified'
         }
 
         if route_index is None or not route_data_json:
-            empty_elevation_fig = go.Figure().update_layout(xaxis_title="Расстояние (м)", yaxis_title="Высота (м)", title='Профиль высот', **common_graph_layout)
-            empty_velocity_fig = go.Figure().update_layout(xaxis_title="Расстояние (м)", yaxis_title="Скорость (км/ч)", title='Профиль скорости', **common_graph_layout)
+            empty_elevation_fig = go.Figure().update_layout(
+                xaxis_title="Расстояние (м)", 
+                yaxis_title="Высота (м)", 
+                title='Профиль высот',
+                **common_graph_layout
+            )
+            empty_velocity_fig = go.Figure().update_layout(
+                xaxis_title="Расстояние (м)", 
+                yaxis_title="Скорость (км/ч)", 
+                title='Профиль скорости',
+                **common_graph_layout
+            )
             return "Выберите маршрут для просмотра информации.", empty_elevation_fig, empty_velocity_fig
 
         route_data = json.loads(route_data_json)

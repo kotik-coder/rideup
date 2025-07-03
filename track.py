@@ -2,9 +2,10 @@
 import numpy as np
 from scipy.signal import medfilt, savgol_filter
 from dataclasses import dataclass
-from typing import List
+from typing import Dict, List
 from datetime import datetime
 from route import GeoPoint
+from map_helpers import print_step
 
 # Constants for MTB physics (adjust based on your riding style)
 MAX_PLAUSIBLE_SPEED = 47.2  # m/s (~170 km/h, beyond downhill world record)

@@ -1,18 +1,11 @@
 import plotly.graph_objects as go
 import numpy as np
+from typing import List, Optional, Dict
 from map_helpers import print_step
-from route import GeoPoint # For bearing calculation
+from route import GeoPoint
 
-
-def calculate_zoom(lats, lons):
-    """
-    Вычисляет уровень масштабирования на основе географического охвата.
-    This is a copy of the function in layout.py to avoid circular imports.
-    If this function is only used by update_map_figure, it belongs here.
-    If layout.py also needs it directly (which it does for initial figure),
-    it might be better to have it in a shared 'geometry_utils.py' or similar.
-    For now, duplicating to avoid circular imports with layout.py/callbacks.py.
-    """
+def calculate_zoom(lats: List[float], lons: List[float]) -> int:
+    """Calculate zoom level based on geographic coverage."""
     if not lats or not lons:
         print_step("Zoom", "Расчет зума: Нет координат. Возвращаю дефолтный зум.")
         return 12
@@ -31,12 +24,8 @@ def calculate_zoom(lats, lons):
     print_step("Zoom", f"Рассчитан зум: {final_zoom:.2f}")
     return final_zoom
 
-def add_forest_boundary_and_name_to_figure(fig, bounds):
-    """
-    Adds the forest boundary and name annotation to the Plotly figure.
-    This is a copy of the function in layout.py to avoid circular imports.
-    Similar to calculate_zoom, if used by both, a shared geometry_utils might be best.
-    """
+def add_forest_boundary_and_name_to_figure(fig: go.Figure, bounds: List[float]) -> None:
+    """Add forest boundary and name annotation to the Plotly figure."""
     min_lon_val, min_lat_val, max_lon_val, max_lat_val = bounds
 
     lons_boundary = [min_lon_val, max_lon_val, max_lon_val, min_lon_val, min_lon_val]
@@ -69,7 +58,6 @@ def add_forest_boundary_and_name_to_figure(fig, bounds):
         borderpad=4
     )
     print_step("Map Drawing", "Добавлены границы и название леса.")
-
 
 def add_route_to_figure(fig, route_dict, is_selected=False, highlight_checkpoint=None):
     """Adds a route trace to the Plotly figure."""
