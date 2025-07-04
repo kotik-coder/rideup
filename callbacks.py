@@ -30,42 +30,36 @@ def setup_callbacks(app, spot, spot_loader, route_processor):
         options = []
         
         spot_loader.load_valid_routes_and_tracks()
-        route_processor.local_photos = spot.local_photos
-        route_processor.route_to_tracks = spot._route_to_tracks
-        
+                
         if spot.routes:
             print_step("Callback", f"Found {len(spot.routes)} routes to process")
             for i, route in enumerate(spot.routes):
                 try:
                     processed_route = route_processor.process_route(route)
                     if processed_route and processed_route.smooth_points and processed_route.checkpoints:
-                        # Store both the processed route and serialized data
+                        # Find associated tracks for the current route
+                        associated_tracks = [t for t in spot.tracks if t.route == route]
+                        
+                        # Generate elevation and velocity profiles using StatisticsCollector
+                        profiles = route_processor.stats_collector.generate_route_profiles(processed_route.route, associated_tracks)
+
                         route_data.append({
-                            'processed_route': processed_route,
-                            'serialized': {
-                                'name': processed_route.route.name,
-                                'checkpoints': [cp.to_dict() for cp in processed_route.checkpoints],
-                                'segments': [{
-                                    'distance': s.distance,
-                                    'elevation_gain': s.elevation_gain,
-                                    'elevation_loss': s.elevation_loss,
-                                    'net_elevation': s.net_elevation,
-                                    'min_segment_elevation': s.min_elevation,
-                                    'max_segment_elevation': s.max_elevation,
-                                    'start_checkpoint': s.start_checkpoint_index,
-                                    'end_checkpoint': s.end_checkpoint_index
-                                } for s in processed_route.segments],
-                                'elevation_profile': processed_route.route.elevations,
-                                'velocity_profile': []
-                            }
+                            "index": i,
+                            "name": processed_route.route.name,
+                            "distance_km": round(processed_route.route.total_distance / 1000, 2),
+                            "checkpoints": processed_route.checkpoints,  # Keep as Checkpoint objects
+                            "segments": processed_route.segments,        # Keep as Segment objects
+                            "smooth_points": processed_route.smooth_points,  # Keep as GeoPoint objects
+                            "elevation_profile": profiles.get('elevation_profile', []),
+                            "velocity_profile": profiles.get('velocity_profile', [])
                         })
                         options.append({'label': route.name, 'value': i})
                 except Exception as e:
-                    print_step("Callback", f"Error processing route '{route.name}': {e}", level="ERROR")
-                    print(traceback.format_exc())
+                    print_step("Callback", f"Error processing route {route.name}: {e}", level="ERROR")
+                    traceback.print_exc()
 
-        print_step("Callback", f"Processed {len(route_data)} routes")
-        return json.dumps(route_data, default=lambda x: x.__dict__ if hasattr(x, '__dict__') else str(x)), options
+        print_step("Callback", f"Loaded {len(route_data)} processed routes")
+        return json.dumps(route_data, default=lambda o: o.__dict__), options
 
     @app.callback(
         Output('selected-route-index', 'data'),
@@ -98,7 +92,8 @@ def setup_callbacks(app, spot, spot_loader, route_processor):
 
             for i, route_dict in enumerate(route_data):
                 for p in route_dict['smooth_points']:
-                    dist = GeoPoint(clicked_lat, clicked_lon).distance_to(GeoPoint(p[0], p[1]))
+                    # Corrected access to lat and lon
+                    dist = GeoPoint(clicked_lat, clicked_lon).distance_to(GeoPoint(p['lat'], p['lon']))
                     if dist < min_distance:
                         min_distance = dist
                         closest_route_index = i
@@ -116,7 +111,6 @@ def setup_callbacks(app, spot, spot_loader, route_processor):
         State('map-graph', 'figure')
     )
     def update_map_figure(route_index, checkpoint_index, route_data_json, current_figure):
-        """Draws all routes and correctly zooms based on selection changes."""
         fig = go.Figure(current_figure)
 
         if not route_data_json:
@@ -129,17 +123,17 @@ def setup_callbacks(app, spot, spot_loader, route_processor):
         if triggered_id in [None, 'selected-route-index']:
             if route_index is not None and route_index < len(route_data):
                 route_info = route_data[route_index]
-                processed_route = route_info['processed_route']
-                lats = [p.lat for p in processed_route.smooth_points]
-                lons = [p.lon for p in processed_route.smooth_points]
+                # Get lats and lons from GeoPoint objects
+                lats = [p.lat for p in route_info['smooth_points']]
+                lons = [p.lon for p in route_info['smooth_points']]
                 
                 center_lat = (min(lats) + max(lats)) / 2
                 center_lon = (min(lons) + max(lons)) / 2
                 zoom = calculate_zoom(lats, lons)
                 
                 fig.update_layout(
-                    map_center={'lat': center_lat, 'lon': center_lon},
-                    map_zoom=zoom
+                    mapbox_center={'lat': center_lat, 'lon': center_lon},
+                    mapbox_zoom=zoom
                 )
             else:
                 min_lon, min_lat, max_lon, max_lat = spot.bounds
@@ -148,21 +142,20 @@ def setup_callbacks(app, spot, spot_loader, route_processor):
                 zoom = calculate_zoom([min_lat, max_lat], [min_lon, max_lon])
                 
                 fig.update_layout(
-                    map_center={'lat': center_lat, 'lon': center_lon},
-                    map_zoom=zoom
+                    mapbox_center={'lat': center_lat, 'lon': center_lon},
+                    mapbox_zoom=zoom
                 )
-                add_forest_boundary_and_name_to_figure(fig, spot.bounds)
+                add_spot_boundary_to_figure(fig, spot)
 
         # Draw all routes
         fig.data = []
         for i, route_info in enumerate(route_data):
-            processed_route = route_info['processed_route']
-            is_selected = i == route_index
             add_route_to_figure(
                 fig,
-                processed_route,
-                is_selected=is_selected,
-                highlight_checkpoint=checkpoint_index if is_selected else None
+                route_info['smooth_points'],  # Pass GeoPoint objects directly
+                route_info['checkpoints'],    # Pass Checkpoint objects directly
+                is_selected=(i == route_index),
+                highlight_checkpoint=checkpoint_index
             )
 
         return fig
@@ -209,31 +202,43 @@ def setup_callbacks(app, spot, spot_loader, route_processor):
         route_data = json.loads(route_data_json)
         route = route_data[route_index]
 
+        # Helper function to get elevation from either object or dict
+        def get_elevation(point):
+            return point.elevation if hasattr(point, 'elevation') else point['elevation']
+
         # Route General Info
+        elevation_profile_data = route.get('elevation_profile', [])
+        total_distance = route['distance_km'] * 1000  # Convert back to meters
+        mean_elevation = np.mean([get_elevation(p) for p in route['smooth_points']]) if route['smooth_points'] else 0
+
         general_info = dash.html.Div([
             dash.html.H5(route['name'], className="mb-1 fs-6"),
-            dash.html.P(f"Длина маршрута: {route['elevation_profile'][-1]['distance']:.2f} м", className="mb-1", style={'fontSize': '0.9em'}),
-            dash.html.P(f"Средняя высота: {np.mean([p['elevation'] for p in route['elevation_profile']]):.1f} м", className="mb-1", style={'fontSize': '0.9em'}),
+            dash.html.P(f"Длина маршрута: {total_distance:.2f} м", className="mb-1", style={'fontSize': '0.9em'}),
+            dash.html.P(f"Средняя высота: {mean_elevation:.1f} м", className="mb-1", style={'fontSize': '0.9em'}),
             dash.html.P(f"Набор высоты: {sum(s['elevation_gain'] for s in route['segments']):.1f} м", className="mb-1", style={'fontSize': '0.9em'}),
             dash.html.P(f"Потеря высоты: {sum(s['elevation_loss'] for s in route['segments']):.1f} м", className="mb-0", style={'fontSize': '0.9em'}),
         ])
 
         # Elevation Profile
-        distances = [p['distance'] for p in route['elevation_profile']]
-        elevations = [p['elevation'] for p in route['elevation_profile']]
+        # Helper function to get distance from either object or dict
+        def get_distance(point):
+            return point.distance if hasattr(point, 'distance') else point['distance']
+
+        distances = [get_distance(p) for p in elevation_profile_data] if elevation_profile_data else []
+        elevations = [get_elevation(p) for p in elevation_profile_data] if elevation_profile_data else []
 
         elevation_fig = go.Figure()
-        elevation_fig.add_trace(go.Scatter(
-            x=distances,
-            y=elevations,
-            mode='lines',
-            line_color='blue',
-            hoverinfo='text',
-            hovertext=[f"Расстояние: {d:.1f} м<br>Высота: {e:.1f} м" for d, e in zip(distances, elevations)],
-            showlegend=False
-        ))
+        if distances and elevations:
+            elevation_fig.add_trace(go.Scatter(
+                x=distances,
+                y=elevations,
+                mode='lines',
+                line_color='blue',
+                hoverinfo='text',
+                hovertext=[f"Расстояние: {d:.1f} м<br>Высота: {e:.1f} м" for d, e in zip(distances, elevations)],
+                showlegend=False
+            ))
 
-        if elevations:
             median_elevation = np.median(elevations)
             polygons_above_median, polygons_below_median = get_fill_polygons(distances, elevations, median_elevation)
             for poly_coords in polygons_above_median:
@@ -257,15 +262,20 @@ def setup_callbacks(app, spot, spot_loader, route_processor):
 
         if checkpoint_index is not None and checkpoint_index < len(route['checkpoints']):
             selected_cp = route['checkpoints'][checkpoint_index]
+            # Helper to get checkpoint attributes
+            def get_cp_attr(checkpoint, attr):
+                return getattr(checkpoint, attr) if hasattr(checkpoint, attr) else checkpoint[attr]
+
             elevation_fig.add_trace(go.Scatter(
-                x=[selected_cp['distance_from_start']],
-                y=[selected_cp['elevation']],
+                x=[get_cp_attr(selected_cp, 'distance_from_start')],
+                y=[get_cp_attr(selected_cp, 'elevation')],
                 mode='markers',
                 marker=dict(size=12, color='gold', line=dict(width=2, color='black')),
                 hoverinfo='text',
-                hovertext=f"{selected_cp['name']}<br>Расстояние: {selected_cp['distance_from_start']:.1f} м<br>Высота: {selected_cp['elevation']:.1f} м",
+                hovertext=f"{get_cp_attr(selected_cp, 'name')}<br>Расстояние: {get_cp_attr(selected_cp, 'distance_from_start'):.1f} м<br>Высота: {get_cp_attr(selected_cp, 'elevation'):.1f} м",
                 showlegend=False
             ))
+
 
         elevation_fig.update_layout(
             xaxis_title='Расстояние (м)',
@@ -316,7 +326,7 @@ def setup_callbacks(app, spot, spot_loader, route_processor):
                             mode='none', showlegend=False
                         ))
 
-        if velocity_distances:
+            # Only add pedestrian speed line if there's velocity data to compare against
             velocity_fig.add_shape(
                 type='line',
                 x0=min(velocity_distances),
@@ -395,7 +405,7 @@ def setup_callbacks(app, spot, spot_loader, route_processor):
         if checkpoint_index >= len(route['checkpoints']):
             return "Неверный индекс чекпоинта."
 
-        return create_checkpoint_card(route['checkpoints'][checkpoint_index]) # Use imported function
+        return create_checkpoint_card(route['checkpoints'][checkpoint_index])  # Pass Checkpoint object directly
 
     @app.callback(
         Output('selected-checkpoint-index', 'data', allow_duplicate=True),

@@ -15,10 +15,14 @@ REQUEST_DELAY = 1.0  # Задержка между запросами в сек�
 
 DEBUG = True
 
-def print_step(prefix : str, message: str, level: str = "INFO"):
+def print_step(prefix : str, message: str, level: str = "INFO"):    
     if(DEBUG):
         timestamp = datetime.now().strftime('%H:%M:%S')
-        print(f"[{timestamp}] [{prefix}] [{level}] {message}")
+        msg = f"[{timestamp}] [{prefix}] [{level}] {message}"
+        if(str == 'ERROR'): 
+            from colorama import Fore, Style            
+            msg = Fore.RED + msg + Style.RESET_ALL
+        print(msg)
 
 class ElevationCache:
     def __init__(self):

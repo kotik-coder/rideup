@@ -1,6 +1,6 @@
 # route.py
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 import math
 
 MAX_DISTANCE_KM = 3.0
@@ -11,6 +11,14 @@ class GeoPoint:
     lat: float
     lon: float
     elevation: float = 0.0
+    
+    def to_dict(self) -> dict:
+        """Converts the GeoPoint object to a dictionary for serialization."""
+        return {
+            'lat': self.lat,
+            'lon': self.lon,
+            'elevation': self.elevation
+        }
 
     def distance_to(self, point: "GeoPoint"):
         R = 6371000 # Radius of Earth in meters
@@ -60,6 +68,7 @@ class Route:
     points: List[GeoPoint]
     elevations: List[float]
     descriptions: List[str]
+    total_distance: Optional[float]
 
     def _point_in_bounds(self, bounds : List[float], point: GeoPoint) -> bool:
         lat = point.lat

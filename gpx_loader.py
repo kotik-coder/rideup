@@ -2,7 +2,7 @@ import gpxpy
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timedelta, timezone
-from route import Route, GeoPoint # Modified import: specify classes from route
+from route import Route, GeoPoint
 from map_helpers import print_step, safe_get_elevation
 from track import Track, TrackPoint
 
@@ -39,32 +39,39 @@ class LocalGPXLoader:
                 metadata["time"] = gpx.time
         return metadata
 
-    def load_routes_and_tracks(self, gpx_path: Path) -> List[Tuple[Route, List[Track]]]: # Modified return type
-        results: List[Tuple[Route, List[Track]]] = [] # List to store (Route, List[Track]) tuples
+    def load_routes_and_tracks(self, gpx_path: Path) -> List[Tuple[Route, List[Track]]]:
+        results: List[Tuple[Route, List[Track]]] = []
         with open(gpx_path, 'r') as gpx_file:
             gpx = gpxpy.parse(gpx_file)
 
-        for track_gpx in gpx.tracks: # 'track_gpx' refers to gpxpy.gpx.GPXTrack
+        for track_gpx in gpx.tracks:
             current_route_points = []
             current_elevations = []
             current_descriptions = []
-            current_tracks_for_route: List[Track] = [] # To collect Track objects for this specific Route
+            current_tracks_for_route: List[Track] = []
+            total_distance = 0.0  # Initialize total distance
 
             for segment in track_gpx.segments:
                 # Collect data for the Route object
-                for pt in segment.points:
-                    current_route_points.append(GeoPoint(pt.latitude, pt.longitude, pt.elevation or 0))
-                    current_elevations.append(pt.elevation or 0)
-                    current_descriptions.append(pt.description or "")
+                if segment.points:
+                    # Calculate distance between points for the route
+                    prev_point = None
+                    for pt in segment.points:
+                        geo_point = GeoPoint(pt.latitude, pt.longitude, pt.elevation or 0)
+                        current_route_points.append(geo_point)
+                        current_elevations.append(pt.elevation or 0)
+                        current_descriptions.append(pt.description or "")
+                        
+                        if prev_point:
+                            total_distance += prev_point.distance_to(geo_point)
+                        prev_point = geo_point
                     
                 # Create Track object from segment points
                 track_points_for_segment = []
-                # Ensure segment.points is not empty before accessing index 0
                 start_time = self._ensure_utc(segment.points[0].time) if segment.points and segment.points[0].time else None
                 
                 for pt in segment.points:
                     timestamp = self._ensure_utc(pt.time)
-                    # Handle cases where start_time might be None (e.g., if first point has no time)
                     elapsed = (timestamp - start_time).total_seconds() if start_time and timestamp else 0
                     track_points_for_segment.append(TrackPoint(
                         point=GeoPoint(pt.latitude, pt.longitude, pt.elevation or 0),
@@ -73,16 +80,22 @@ class LocalGPXLoader:
                     ))
                 
                 if track_points_for_segment:
-                    current_tracks_for_route.append(Track(track_points_for_segment)) # Add to the list for this Route
+                    current_tracks_for_route.append(Track(track_points_for_segment))
             
             if current_route_points:
                 route_obj = Route(
-                    name=track_gpx.name or gpx_path.stem, # Use gpx_path.stem as fallback if gpx.track.name is None
+                    name=track_gpx.name or gpx_path.stem,
                     points=current_route_points,
                     elevations=current_elevations,
-                    descriptions=current_descriptions
+                    descriptions=current_descriptions,
+                    total_distance=total_distance  # Set the calculated total distance
                 )
-                results.append((route_obj, current_tracks_for_route)) # Append the (Route, List[Track]) tuple
+                
+                # Set route reference for all tracks
+                for track in current_tracks_for_route:
+                    track.route = route_obj
+                
+                results.append((route_obj, current_tracks_for_route))
 
         return results
 

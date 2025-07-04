@@ -1,10 +1,12 @@
 from typing import List, Dict, Set, Optional, Tuple
 from datetime import datetime, timezone
 from route import GeoPoint
+from spot_photo import SpotPhoto
 from track import Track, TrackPoint
 from media_helpers import get_photo_html # Assuming this function exists and is correctly imported
 
 PHOTO_CHECKPOINT_DISTANCE_THRESHOLD = 50.0  # meters
+
 
 class Checkpoint:
     """
@@ -63,10 +65,8 @@ class CheckpointGenerator:
     Generates checkpoints along a smooth route, including start, end,
     uniformly spaced points, and points associated with local photos.
     """
-    def __init__(self, local_photos: List[Dict[str, any]]):
+    def __init__(self, local_photos: List[SpotPhoto]): # Changed type hint here
         self.local_photos = local_photos
-        # Maps smooth route index to photo info for photo checkpoints
-        self.index_to_photo_info: Dict[int, Dict[str, any]] = {}
 
     def generate_checkpoints(self,
                              smooth_route: List[Tuple[float, float]],
@@ -74,12 +74,6 @@ class CheckpointGenerator:
                              associated_tracks: List[Track]) -> List[Checkpoint]:
         """
         Main method to generate all checkpoints for a route.
-        Args:
-            smooth_route: A list of (latitude, longitude) tuples representing the smoothed route.
-            route_elevations: A list of elevation values corresponding to each point in smooth_route.
-            associated_tracks: A list of Track objects associated with the route, used for photo matching.
-        Returns:
-            A list of Checkpoint objects.
         """
         if len(smooth_route) < 2:
             return []
@@ -87,7 +81,8 @@ class CheckpointGenerator:
         distances = self._calculate_smooth_route_distances(smooth_route)
         total_length = distances[-1] if distances else 0
 
-        marker_indices = self._collect_marker_indices(
+        # Now _collect_marker_indices returns both marker indices and photo checkpoint data
+        marker_indices, photo_checkpoints_data = self._collect_marker_indices(
             smooth_route,
             total_length,
             distances,
@@ -98,7 +93,8 @@ class CheckpointGenerator:
             smooth_route,
             route_elevations,
             distances,
-            marker_indices
+            marker_indices,
+            photo_checkpoints_data # Pass photo checkpoint data
         )
 
     def _calculate_smooth_route_distances(self, smooth_route: List[Tuple[float, float]]) -> List[float]:
@@ -121,49 +117,44 @@ class CheckpointGenerator:
                                 smooth_route: List[Tuple[float, float]],
                                 total_length: float,
                                 distances: List[float],
-                                associated_tracks: List[Track]) -> List[int]:
+                                associated_tracks: List[Track]) -> Tuple[List[int], List[Tuple[int, SpotPhoto]]]:
         """
-        Collects all unique indices from the smooth route that should be marked as checkpoints.
-        Includes start, end, photo points, and uniformly spaced points.
-        Args:
-            smooth_route: The smoothed route points.
-            total_length: The total length of the route.
-            distances: Cumulative distances for each point in smooth_route.
-            associated_tracks: Tracks used to find photo locations.
+        Collects all unique indices from the smooth route that should be marked as checkpoints,
+        and also returns the associated photo data.
         Returns:
-            A sorted list of unique indices for checkpoints.
+            A tuple: (sorted list of unique indices for checkpoints,
+                      list of (index, SpotPhoto) for photo checkpoints).
         """
         marker_indices = set()
         marker_indices.add(0) # Start point
         marker_indices.add(len(smooth_route) - 1) # End point
 
-        self._add_photo_markers(marker_indices, smooth_route, associated_tracks)
+        # photo_checkpoints_data will be populated and returned by _add_photo_markers
+        photo_checkpoints_data = self._add_photo_markers(marker_indices, smooth_route, associated_tracks)
+        
         self._add_uniform_markers(marker_indices, distances, total_length)
 
-        return sorted(list(marker_indices))
-
-    def _is_photo_already_processed(self, photo_path: str) -> bool:
-        """
-        Checks if a photo with the given path has already been processed and added
-        as a photo checkpoint.
-        Args:
-            photo_path: The file path of the photo.
-        Returns:
-            True if the photo has already been processed, False otherwise.
-        """
-        return photo_path in [p.get('path') for p in self.index_to_photo_info.values()]
+        return sorted(list(marker_indices)), photo_checkpoints_data
 
     def _add_photo_markers(self,
                            marker_indices: Set[int],
                            smooth_route: List[Tuple[float, float]],
-                           associated_tracks: List[Track]) -> None:
+                           associated_tracks: List[Track]) -> List[Tuple[int, SpotPhoto]]:
         """
-        Adds indices for points near local photos to the marker_indices set.
+        Adds indices for points near local photos to the marker_indices set, and
+        returns a list of (index, SpotPhoto) for the photo checkpoints identified.
         Args:
             marker_indices: The set to add marker indices to.
             smooth_route: The smoothed route points.
             associated_tracks: Tracks containing timestamped points for photo matching.
+        Returns:
+            A list of tuples (index, SpotPhoto) for all identified photo checkpoints.
         """
+        identified_photo_checkpoints: List[Tuple[int, SpotPhoto]] = []
+        
+        # Keep track of photo paths already processed in this run to avoid duplicates
+        processed_photo_paths: Set[str] = set() 
+
         for track in associated_tracks:
             if not track.points:
                 continue
@@ -172,55 +163,61 @@ class CheckpointGenerator:
             track_end_time = track.points[-1].timestamp
             track_duration = (track_end_time - track_start_time).total_seconds()
 
-            for photo in sorted(self.local_photos, key=lambda x: x.get('timestamp', datetime.min.replace(tzinfo=timezone.utc))):
-                # Ensure photo has a timestamp and has not been processed already
-                if photo.get('timestamp') and not self._is_photo_already_processed(photo['path']):
-                    self._process_photo_for_marker(
+            # Sort photos by timestamp to process chronologically
+            for photo in sorted(self.local_photos, key=lambda x: x.timestamp if x.timestamp else datetime.min.replace(tzinfo=timezone.utc)):
+                # Ensure photo has a timestamp and has not been processed already in this run
+                if photo.timestamp and photo.path not in processed_photo_paths:
+                    result = self._process_photo_for_marker(
                         photo, track, track_start_time,
                         track_duration, smooth_route,
-                        marker_indices
+                        identified_photo_checkpoints # Pass the accumulating list
                     )
+                    if result:
+                        smooth_idx, spot_photo_obj = result
+                        marker_indices.add(smooth_idx)
+                        identified_photo_checkpoints.append((smooth_idx, spot_photo_obj))
+                        processed_photo_paths.add(spot_photo_obj.path) # Mark photo as processed
+
+        return identified_photo_checkpoints
 
     def _process_photo_for_marker(self,
-                                  photo: Dict[str, any],
+                                  photo: SpotPhoto,
                                   track: Track,
                                   track_start_time: datetime,
                                   track_duration: float,
                                   smooth_route: List[Tuple[float, float]],
-                                  marker_indices: Set[int]) -> None:
+                                  current_photo_checkpoints: List[Tuple[int, SpotPhoto]]) -> Optional[Tuple[int, SpotPhoto]]:
         """
         Processes a single photo to determine if it should add a marker.
         Args:
-            photo: Dictionary containing photo information (must have 'timestamp' and 'path').
+            photo: SpotPhoto object containing photo information.
             track: The current track being processed.
             track_start_time: Start timestamp of the track.
             track_duration: Duration of the track in seconds.
             smooth_route: The smoothed route points.
-            marker_indices: The set to add marker indices to.
+            current_photo_checkpoints: List of (index, SpotPhoto) tuples already identified as photo checkpoints in this run.
+        Returns:
+            A tuple (closest_smooth_idx, photo) if a photo checkpoint is identified, otherwise None.
         """
-        photo_time = photo.get('timestamp')
+        photo_time = photo.timestamp
         if not photo_time:
-            return
+            return None
 
         photo_elapsed = (photo_time - track_start_time).total_seconds()
 
-        # Check if photo time is within track duration
         if not (0 <= photo_elapsed <= track_duration):
-            return
+            return None
 
-        # Find the closest track point by elapsed time
         closest_track_point = self._find_closest_track_point(track.points, photo_elapsed)
 
-        # If no suitable track point found or time difference is too large
         if closest_track_point is None or abs(photo_elapsed - closest_track_point.elapsed_seconds) >= 300:
-            return
+            return None
 
-        # Find the closest smooth route point to the track point's geographic coordinates
         closest_smooth_idx = self._find_closest_smooth_point(smooth_route, closest_track_point.point)
 
-        # Check for proximity to existing photo checkpoints to avoid duplicates
+        # Check for proximity to existing photo checkpoints identified so far
         is_too_close_to_existing_photo = False
-        for existing_idx in self.index_to_photo_info.keys():
+        for existing_idx, _ in current_photo_checkpoints: # Iterate through the passed list
             existing_point = GeoPoint(*smooth_route[existing_idx])
             new_point = GeoPoint(*smooth_route[closest_smooth_idx])
             if new_point.distance_to(existing_point) < PHOTO_CHECKPOINT_DISTANCE_THRESHOLD:
@@ -228,13 +225,10 @@ class CheckpointGenerator:
                 break
 
         if not is_too_close_to_existing_photo:
-            marker_indices.add(closest_smooth_idx)
-            # Store the full photo info in the dictionary, keyed by smooth route index
-            self.index_to_photo_info[closest_smooth_idx] = {
-                'path': photo['path'],
-                'timestamp': photo_time,
-                'coords': photo.get('coords') # Store original photo coords if available
-            }
+            # Return the index and the SpotPhoto object
+            return closest_smooth_idx, photo
+        
+        return None
 
     def _find_closest_track_point(self,
                                   track_points: List[TrackPoint],
@@ -303,28 +297,34 @@ class CheckpointGenerator:
                                          smooth_route: List[Tuple[float, float]],
                                          route_elevations: List[float],
                                          distances: List[float],
-                                         marker_indices: List[int]) -> List[Checkpoint]:
+                                         marker_indices: List[int],
+                                         photo_checkpoints_data: List[Tuple[int, SpotPhoto]]) -> List[Checkpoint]:
         """
-        Creates Checkpoint objects from the collected marker indices.
+        Creates Checkpoint objects from the collected marker indices and photo data.
         Args:
             smooth_route: The smoothed route points.
             route_elevations: Elevations corresponding to smooth_route points.
             distances: Cumulative distances for smooth_route points.
             marker_indices: Sorted list of indices to create checkpoints for.
+            photo_checkpoints_data: List of (index, SpotPhoto) for photo checkpoints.
         Returns:
             A list of Checkpoint objects.
         """
         checkpoints = []
         total_positions = len(marker_indices)
 
+        # Create a temporary mapping for efficient lookup of photo info by index
+        # This temporary dictionary is created inside the method and is not a class attribute.
+        idx_to_photo: Dict[int, SpotPhoto] = {idx: photo for idx, photo in photo_checkpoints_data}
+
         for i, idx in enumerate(marker_indices):
             point = smooth_route[idx]
             elevation = route_elevations[idx]
-            photo_info = self.index_to_photo_info.get(idx)
+            photo_info = idx_to_photo.get(idx) # Get SpotPhoto object
             distance_from_start = distances[idx] if idx < len(distances) else 0
 
             is_photo_checkpoint = photo_info is not None
-            photo_path = photo_info['path'] if is_photo_checkpoint else None
+            photo_path = photo_info.path if is_photo_checkpoint else None # Access attribute directly
 
             # Determine checkpoint name and description
             if i == 0:

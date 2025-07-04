@@ -1,8 +1,9 @@
-from typing import List, Dict, Tuple
+from typing import List, Dict
 from dataclasses import dataclass
 from map_helpers import print_step
 from route import GeoPoint, Route
 from track import Track
+import numpy as np # Add numpy import for median and mean if not already present
 
 @dataclass
 class Segment:
@@ -15,6 +16,19 @@ class Segment:
     max_elevation: float
     start_checkpoint_index: int
     end_checkpoint_index: int
+    
+    def to_dict(self) -> Dict[str, any]:
+        """Converts the Segment object to a dictionary for serialization."""
+        return {
+            'distance': self.distance,
+            'elevation_gain': self.elevation_gain,
+            'elevation_loss': self.elevation_loss,
+            'net_elevation': self.net_elevation,
+            'min_elevation': self.min_elevation,
+            'max_elevation': self.max_elevation,
+            'start_checkpoint_index': self.start_checkpoint_index,
+            'end_checkpoint_index': self.end_checkpoint_index
+        }
 
 class StatisticsCollector:
     """Collects and generates various statistical profiles and analyses for routes and tracks."""
@@ -27,65 +41,63 @@ class StatisticsCollector:
         Returns dictionary containing both profiles.
         """
         profiles = {
-            'elevation_profile': self.create_elevation_profile(
-                [(p.lat, p.lon) for p in route.points],
-                route.elevations
-            ) if route.points and route.elevations else [],
-            'velocity_profile': self.create_velocity_profile_from_track(associated_tracks[0]) if associated_tracks else []
+            'elevation_profile': self.create_elevation_profile(route),
+            # Pass associated_tracks directly to create_velocity_profile_from_track
+            'velocity_profile': self.create_velocity_profile_from_track(associated_tracks) if associated_tracks else []
         }
         return profiles
 
-
-    def create_elevation_profile(self, points: List[Tuple[float, float]], elevations: List[float]) -> List[Dict[str, float]]:
+    def create_elevation_profile(self, route: Route) -> List[Dict[str, float]]:
         """
-        Creates an elevation profile from a list of points and their corresponding elevations.
+        Creates an elevation profile from a route.
         The profile consists of dictionaries with 'distance' (cumulative) and 'elevation'.
+        Also calculates and sets the route's total_distance.
 
         Args:
-            points (List[Tuple[float, float]]): List of (latitude, longitude) tuples.
-            elevations (List[float]): List of elevation values corresponding to the points.
+            route (Route): The route to process
 
         Returns:
             List[Dict[str, float]]: A list of dictionaries, each with 'distance' and 'elevation'.
         """
         profile = []
-        total_distance = 0.0
+        route.total_distance = 0.0  # Initialize total distance
         
-        if not points or not elevations or len(points) != len(elevations):
+        if not route.points or not route.elevations or len(route.points) != len(route.elevations):
             print_step("StatisticsCollector", "Elevation profile creation: Empty or mismatched points/elevations. Returning empty profile.", level="WARNING")
             return []
 
         # Add the starting point
-        profile.append({'distance': 0.0, 'elevation': elevations[0]})
+        profile.append({'distance': 0.0, 'elevation': route.elevations[0]})
         
         # Calculate cumulative distance and add subsequent points
-        for i in range(1, len(points)):
-            p1 = GeoPoint(points[i-1][0], points[i-1][1])
-            p2 = GeoPoint(points[i][0], points[i][1])
-            total_distance += p1.distance_to(p2)
-            profile.append({'distance': total_distance, 'elevation': elevations[i]})
+        for i in range(1, len(route.points)):
+            segment_distance = route.points[i-1].distance_to(route.points[i])
+            route.total_distance += segment_distance
+            profile.append({'distance': route.total_distance, 'elevation': route.elevations[i]})
         
-        print_step("StatisticsCollector", f"Elevation profile created with {len(profile)} points.")
+        print_step("StatisticsCollector", f"Elevation profile created with {len(profile)} points. Total distance: {route.total_distance:.2f}m")
         return profile
 
-    def create_velocity_profile_from_track(self, track: Track) -> List[Dict[str, float]]:
+    def create_velocity_profile_from_track(self, associated_tracks: List[Track]) -> List[Dict[str, float]]:
         """
-        Leverages the Track object's internal analysis to create a velocity profile.
-        This method acts as an interface to the Track's functionality.
+        Creates a velocity profile from the route's primary track.
+        Uses the first associated track if available.
 
         Args:
-            track (Track): The Track object from which to extract the velocity profile.
+            associated_tracks (List[Track]): The list of tracks associated with the route.
 
         Returns:
             List[Dict[str, float]]: A list of dictionaries, each with 'distance' and 'velocity'.
         """
-        if not isinstance(track, Track):
-            print_step("StatisticsCollector", "Invalid input: Expected a Track object for velocity profile.", level="ERROR")
+        if not associated_tracks: # Use associated_tracks directly
+            print_step("StatisticsCollector", "No tracks available for velocity profile.", level="WARNING")
             return []
 
+        track = associated_tracks[0] # Use the first associated track
         profile = []
+        
         if not track.analysis:
-            print_step("Процессинг", f"Создание профиля скорости: Трек не содержит данных анализа. Возвращаю пустой профиль.")
+            print_step("Процессинг", "Создание профиля скорости: Трек не содержит данных анализа. Возвращаю пустой профиль.")
             return []
 
         for analysis_point in track.analysis:
@@ -93,10 +105,10 @@ class StatisticsCollector:
                 'distance': analysis_point.distance_from_start,
                 'velocity': analysis_point.speed
             })
-        print_step("Процессинг", f"Профиль скорости для трека создан успешно.")
-
+        
+        print_step("Процессинг", f"Профиль скорости для трека создан успешно ({len(profile)} точек).")
         return profile
-    
+
 def get_landscape_description(
     current_elevation: float,
     segment_net_elevation_change: float,

@@ -1,6 +1,6 @@
 import osmnx as ox
 from pathlib import Path
-from typing import List, Tuple, Dict
+from typing import List, Tuple
 from dataclasses import dataclass
 
 # Assuming these are available in your project structure
@@ -8,33 +8,28 @@ from map_helpers import print_step
 import gpx_loader
 from gpx_loader import LocalGPXLoader # Assuming LocalGPXLoader is within gpx_loader
 from route import Route
+from spot_photo import SpotPhoto
 from track import Track
 from media_helpers import get_exif_geolocation, get_photo_timestamp
 
 @dataclass
 class Spot:
-    """
-    Represents a geographical spot (e.g., a forest) with its boundaries,
-    and associated routes, tracks, and local photos.
-    """
     name: str
     geostring: str
     bounds: List[float]
     local_photos_folder: str
-    local_photos: List[Dict[str, any]]
+    local_photos: List[SpotPhoto]
     routes: List[Route]
-    tracks: List[Track]
-    _route_to_tracks: Dict[str, List[Track]] # Maps route names to their associated tracks
+    tracks: List[Track]  # Tracks now contain their route reference
 
     def __init__(self, geostring: str, local_photos_folder: str = "local_photos"):
-        self.name = geostring # Using geostring as a default name for the spot
+        self.name = geostring
         self.geostring = geostring
         self.local_photos_folder = local_photos_folder
         self.bounds = self._get_forest_bounds(geostring)
         self.local_photos = []
         self.routes = []
         self.tracks = []
-        self._route_to_tracks = {}
         print_step("Spot", f"Spot '{self.name}' initialized with bounds: {self.bounds}")
 
     def _get_forest_bounds(self, geostring: str) -> List[float]:
@@ -62,7 +57,7 @@ class SpotLoader:
         self.spot = spot
         self._photos_loaded = False # Internal flag to prevent redundant photo loading
 
-    def _load_local_photos(self) -> List[Dict[str, any]]:
+    def _load_local_photos(self) -> List[SpotPhoto]:
         """
         Loads local photos with geolocation and timestamp data from the specified folder
         associated with the spot.
@@ -80,16 +75,9 @@ class SpotLoader:
         photos = []
         for ext in ['*.jpg', '*.jpeg', '*.png']:
             for image_path in folder_path.glob(ext):
-                try:
-                    timestamp = get_photo_timestamp(image_path)                    
-                    if timestamp:
-                        photos.append({
-                            'path': str(image_path),
-                            'coords': get_exif_geolocation(image_path),
-                            'timestamp': timestamp
-                        })
-                except Exception:
-                    continue
+                photo = SpotPhoto.from_image_path(image_path)
+                if photo:
+                    photos.append(photo)
         
         print_step("SpotLoader", f"Found {len(photos)} photos with timestamps.")
         self.spot.local_photos = photos
@@ -107,24 +95,19 @@ class SpotLoader:
         # Collect all (Route, List[Track]) pairs from all GPX files
         loaded_route_track_pairs: List[Tuple[Route, List[Track]]] = []
         
-        for gpx_file in gpx_loader.GPX_DIR.glob("*.gpx"):
-            try:
-                # loader.load_routes_and_tracks returns List[Tuple[Route, List[Track]]]
-                loaded_route_track_pairs.extend(loader.load_routes_and_tracks(gpx_file))
-            except Exception as e:
-                print_step("SpotLoader", f"Error loading GPX file {gpx_file.name}: {e}", level="ERROR")
-                continue
+        for gpx_file in gpx_loader.GPX_DIR.glob("*.gpx"):                        
+            loaded_route_track_pairs.extend(loader.load_routes_and_tracks(gpx_file))
 
         self.spot.routes = [] # Reset to store only valid Route objects
         self.spot.tracks = [] # Reset to be a flattened list of all valid Track objects
-        self.spot._route_to_tracks = {} # Reset the association dictionary
 
         for route, associated_tracks in loaded_route_track_pairs:
-            # Filter routes based on validity criteria (e.g., within bounds)
-            if route.is_valid_route(self.spot.bounds): # Assuming is_valid_route is a method of Route
-                self.spot.routes.append(route) # Add the valid Route object
-                self.spot.tracks.extend(associated_tracks) # Add all associated tracks
-                self.spot._route_to_tracks[route.name] = associated_tracks # Store the association
+            if route.is_valid_route(self.spot.bounds):
+                self.spot.routes.append(route)
+                # Set the route reference for each track
+                for track in associated_tracks:
+                    track.route = route
+                self.spot.tracks.extend(associated_tracks)
             else:
                 print_step("SpotLoader", f"Route '{route.name}' is outside spot bounds or invalid. Skipping.", level="WARN")
 

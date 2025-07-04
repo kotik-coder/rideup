@@ -2,9 +2,9 @@
 import numpy as np
 from scipy.signal import medfilt, savgol_filter
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional
 from datetime import datetime
-from route import GeoPoint
+from route import GeoPoint, Route
 from map_helpers import print_step
 
 # Constants for MTB physics (adjust based on your riding style)
@@ -24,12 +24,14 @@ class TrackAnalysis:
     acceleration: float  # m/s²
     distance_from_start: float  # meters
 
+@dataclass
 class Track:
-    def __init__(self, points: List[TrackPoint]):
+    def __init__(self, points: List[TrackPoint], route: Optional[Route] = None):
         self.points = points
+        self.route = route  # Direct reference to the parent route
         self.analysis: List[TrackAnalysis] = []
         self._analyze()
-
+        
     def _filter_implausible_points(self, times: np.ndarray, distances: np.ndarray) -> tuple:
         """Remove points causing unrealistic speeds/accelerations."""
         valid_indices = []

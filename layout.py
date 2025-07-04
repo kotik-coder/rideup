@@ -1,84 +1,169 @@
+# layout.py
 from typing import List
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 import plotly.graph_objects as go
-from map_visualization import calculate_zoom, add_forest_boundary_and_name_to_figure
+from map_visualization import create_base_map
+from route_processor import ProcessedRoute
+from spot import Spot
 
-def create_initial_figure(bounds: List[float]) -> go.Figure:
-    """Creates the base Plotly map figure with centering and style."""
-    min_lon_val, min_lat_val, max_lon_val, max_lat_val = bounds
-
-    center_lat = (min_lat_val + max_lat_val) / 2
-    center_lon = (min_lon_val + max_lon_val) / 2
-
-    initial_zoom = calculate_zoom([min_lat_val, max_lat_val], [min_lon_val, max_lon_val])
-
-    fig = go.Figure(go.Scattermap())
+def create_initial_figure(spot: Spot) -> go.Figure:
+    """Creates the base Plotly map figure centered on the spot with proper styling."""
+    # Create empty figure with spot boundaries
+    fig = go.Figure()
+    
+    # Set initial view to center of spot bounds
+    min_lon, min_lat, max_lon, max_lat = spot.bounds
+    center_lat = (min_lat + max_lat) / 2
+    center_lon = (min_lon + max_lon) / 2
+    
     fig.update_layout(
-        map_style="open-street-map",
-        map=dict(
+        mapbox=dict(
+            style="open-street-map",
             center=dict(lat=center_lat, lon=center_lon),
-            zoom=initial_zoom
+            zoom=12  # Default zoom, will be adjusted by create_base_map
         ),
         margin={"r":0,"t":0,"l":0,"b":0},
         showlegend=False,
         clickmode='event+select'
     )
-
-    add_forest_boundary_and_name_to_figure(fig, bounds)
+    
     return fig
 
-def setup_layout(initial_bounds):
+def setup_layout(spot: Spot, routes: List[ProcessedRoute] = None) -> dbc.Container:
     """
-    Sets up the main Dash application layout.
-    Requires initial_bounds from RouteManager to create the initial map figure.
+    Creates the main Dash application layout with map and control panels.
+    
+    Args:
+        spot: Spot object containing the geographic area boundaries
+        routes: Optional list of ProcessedRoute objects to display initially
+        
+    Returns:
+        A dbc.Container with the complete application layout including:
+        - Map visualization area
+        - Route selection controls
+        - Information panels
+        - Elevation and velocity profile charts
     """
-    bottom_graphs_vh = 25
-    top_row_dynamic_height = f'calc(100vh - {bottom_graphs_vh}vh - 15px)'
-
-    layout = dbc.Container([
-        dbc.Row([
-            dbc.Col(dcc.Graph(
-                id='map-graph',
-                style={'height': '100%', 'width': '100%'},
-                figure=create_initial_figure(initial_bounds)
-            ), width=7, style={'padding': '0', 'height': '100%'}),
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader("Выбор маршрута", className="font-weight-bold py-2"),
-                    dbc.CardBody([
-                        dcc.Dropdown(
-                            id='route-selector',
-                            options=[],
-                            placeholder="Выберите маршрут",
-                            className="mb-2"
-                        )
-                    ], className="py-2")
-                ], className="mb-2"),
-                dbc.Card([
-                    dbc.CardHeader("Информация о маршруте", className="font-weight-bold py-2"),
-                    dbc.CardBody([
-                        html.Div(id='route-general-info')
-                    ], className="py-2")
-                ], className="mb-2"),
-                dbc.Card([
-                    dbc.CardHeader("Информация о чекпоинте", className="font-weight-bold py-2"),
-                    dbc.CardBody(id='checkpoint-info', className="py-2")
-                ])
-            ], width=5, style={'padding': '0 15px', 'height': '100%', 'overflowY': 'auto'})
-        ], style={'margin': '0', 'height': top_row_dynamic_height}),
-        dbc.Row([
-            dbc.Col([
-                dcc.Graph(id='elevation-profile', style={'height': '100%', 'width': '100%'}),
-            ], width=6),
-            dbc.Col([
-                dcc.Graph(id='velocity-profile', style={'height': '100%', 'width': '100%'})
-            ], width=6)
-        ], style={'margin': '0', 'marginTop': '15px', 'height': f'{bottom_graphs_vh}vh'}),
-        dcc.Store(id='route-data-store'),
-        dcc.Store(id='selected-route-index'),
-        dcc.Store(id='selected-checkpoint-index'),
-        html.Div(id='initial-load-trigger', style={'display': 'none'})
-    ], fluid=True, style={'height': '100vh', 'padding': '0', 'overflowY': 'hidden', 'overflowX': 'hidden'})
-
-    return layout
+    # Layout configuration constants
+    BOTTOM_GRAPHS_HEIGHT_VH = 25  # Height for bottom charts in viewport height units
+    TOP_ROW_HEIGHT = f'calc(100vh - {BOTTOM_GRAPHS_HEIGHT_VH}vh - 15px)'  # Dynamic height calculation
+    
+    # Create initial figure - show routes if provided, otherwise just spot boundaries
+    initial_figure = (
+        create_base_map(spot, routes) if routes 
+        else create_initial_figure(spot))
+    
+    # Main layout structure
+    return dbc.Container(
+        [
+            # Top row - Map and control panels
+            dbc.Row(
+                [
+                    # Map visualization column (70% width)
+                    dbc.Col(
+                        dcc.Graph(
+                            id='map-graph',
+                            figure=initial_figure,
+                            style={'height': '100%', 'width': '100%'},
+                            config={
+                                'displayModeBar': True,
+                                'scrollZoom': True,
+                                'modeBarButtonsToRemove': ['lasso2d', 'select2d']
+                            }
+                        ),
+                        width=7,
+                        className="p-0 h-100"
+                    ),
+                    
+                    # Control panels column (30% width)
+                    dbc.Col(
+                        [
+                            # Route selection card
+                            dbc.Card(
+                                [
+                                    dbc.CardHeader("Route Selection", className="font-weight-bold py-2"),
+                                    dbc.CardBody(
+                                        dcc.Dropdown(
+                                            id='route-selector',
+                                            options=[],
+                                            placeholder="Select a route...",
+                                            className="mb-2",
+                                            clearable=False,
+                                            searchable=True
+                                        ),
+                                        className="py-2"
+                                    )
+                                ],
+                                className="mb-3"
+                            ),
+                            
+                            # Route information card
+                            dbc.Card(
+                                [
+                                    dbc.CardHeader("Route Details", className="font-weight-bold py-2"),
+                                    dbc.CardBody(
+                                        html.Div(id='route-general-info'),
+                                        className="py-2"
+                                    )
+                                ],
+                                className="mb-3"
+                            ),
+                            
+                            # Checkpoint information card
+                            dbc.Card(
+                                [
+                                    dbc.CardHeader("Checkpoint Information", className="font-weight-bold py-2"),
+                                    dbc.CardBody(
+                                        html.Div(id='checkpoint-info'),
+                                        className="py-2"
+                                    )
+                                ]
+                            )
+                        ],
+                        width=5,
+                        className="px-3 h-100 scrollable-panel"
+                    )
+                ],
+                className="g-0 m-0",
+                style={'height': TOP_ROW_HEIGHT}
+            ),
+            
+            # Bottom row - Data visualization charts
+            dbc.Row(
+                [
+                    # Elevation profile chart
+                    dbc.Col(
+                        dcc.Graph(
+                            id='elevation-profile',
+                            style={'height': '100%', 'width': '100%'},
+                            config={'displayModeBar': False}
+                        ),
+                        width=6,
+                        className="px-1"
+                    ),
+                    
+                    # Velocity profile chart
+                    dbc.Col(
+                        dcc.Graph(
+                            id='velocity-profile',
+                            style={'height': '100%', 'width': '100%'},
+                            config={'displayModeBar': False}
+                        ),
+                        width=6,
+                        className="px-1"
+                    )
+                ],
+                className="g-0 mt-2",
+                style={'height': f'{BOTTOM_GRAPHS_HEIGHT_VH}vh'}
+            ),
+            
+            # Hidden components for state management
+            dcc.Store(id='route-data-store'),
+            dcc.Store(id='selected-route-index', data=0),
+            dcc.Store(id='selected-checkpoint-index', data=0),
+            html.Div(id='initial-load-trigger', style={'display': 'none'})
+        ],
+        fluid=True,
+        className="vh-100 p-0 overflow-hidden"
+    )

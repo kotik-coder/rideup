@@ -1,13 +1,14 @@
 # route_processor.py
 import numpy as np
 from scipy.interpolate import Akima1DInterpolator, interp1d
-from typing import List, Tuple
+from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from map_helpers import print_step
 from route import GeoPoint, Route
 from statistics_collector import StatisticsCollector, get_landscape_description, Segment
 from checkpoints import Checkpoint, CheckpointGenerator
 from track import Track
+from spot_photo import SpotPhoto
 
 PHOTO_CHECKPOINT_DISTANCE_THRESHOLD = 50.0  # meters
 
@@ -17,12 +18,12 @@ class ProcessedRoute:
     route: Route
     smooth_points: List[GeoPoint]  # Interpolated points
     segments: List[Segment]
-    checkpoints: List[Checkpoint]
+    checkpoints: List[Checkpoint]    
 
 class RouteProcessor:
-    def __init__(self, local_photos: List[dict], route_to_tracks: dict[str, List[Track]]):
+    def __init__(self, local_photos: List[SpotPhoto], all_tracks: List[Track]):
         self.checkpoint_generator = CheckpointGenerator(local_photos)
-        self.route_to_tracks = route_to_tracks
+        self.all_tracks = all_tracks
         self.stats_collector = StatisticsCollector()
 
     def process_route(self, route: Route) -> ProcessedRoute:
@@ -32,7 +33,8 @@ class RouteProcessor:
         smooth_points, smooth_elevations = self._create_smooth_route(route)
         print_step("RouteProcessor", f"Route '{route.name}': Generated {len(smooth_points)} smoothed points.")
 
-        associated_tracks = self.route_to_tracks.get(route.name, [])
+        # Get tracks associated with this route
+        associated_tracks = [t for t in self.all_tracks if t.route == route]
         
         checkpoints = self.checkpoint_generator.generate_checkpoints(
             [(p.lat, p.lon) for p in smooth_points],
@@ -53,7 +55,7 @@ class RouteProcessor:
             checkpoints=checkpoints
         )
 
-    def _enrich_descriptions(self, checkpoints: List[Checkpoint], segments : List[Segment]) :
+    def _enrich_descriptions(self, checkpoints: List[Checkpoint], segments: List[Segment]):
         for i, checkpoint in enumerate(checkpoints):
             if i < len(segments):
                 segment = segments[i]

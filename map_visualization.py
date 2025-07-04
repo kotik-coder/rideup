@@ -1,4 +1,4 @@
-# map_visualization.py (updated)
+# map_visualization.py
 import plotly.graph_objects as go
 import numpy as np
 from typing import List, Optional
@@ -6,6 +6,7 @@ from map_helpers import print_step
 from route import GeoPoint
 from route_processor import ProcessedRoute
 from checkpoints import Checkpoint
+from spot import Spot
 
 def calculate_zoom(lats: List[float], lons: List[float]) -> int:
     """Calculate zoom level based on geographic coverage."""
@@ -27,165 +28,169 @@ def calculate_zoom(lats: List[float], lons: List[float]) -> int:
     print_step("Zoom", f"Рассчитан зум: {final_zoom:.2f}")
     return final_zoom
 
-def add_forest_boundary_and_name_to_figure(fig: go.Figure, bounds: List[float]) -> None:
-    """Add forest boundary and name annotation to the Plotly figure."""
-    min_lon_val, min_lat_val, max_lon_val, max_lat_val = bounds
+def add_spot_boundary_to_figure(fig: go.Figure, spot: Spot) -> None:
+    """Add spot boundary and name annotation to the Plotly figure."""
+    min_lon, min_lat, max_lon, max_lat = spot.bounds
 
-    lons_boundary = [min_lon_val, max_lon_val, max_lon_val, min_lon_val, min_lon_val]
-    lats_boundary = [min_lat_val, min_lat_val, max_lat_val, max_lat_val, min_lat_val]
-
+    # Add rectangle for spot boundary
     fig.add_trace(go.Scattermap(
-        lat=lats_boundary,
-        lon=lons_boundary,
-        mode='lines',
-        line=dict(width=3, color='blue'),
-        hoverinfo='none',
-        showlegend=False,
-        name="Границы Битцевского леса"
+        mode="lines",
+        lon=[min_lon, max_lon, max_lon, min_lon, min_lon],
+        lat=[min_lat, min_lat, max_lat, max_lat, min_lat],
+        marker={'size': 10, 'color': "red"},
+        name="Spot Boundary",
+        hoverinfo='text',
+        hovertext=f"Граница спота: {spot.name}",
+        showlegend=False
     ))
 
-    center_lat = (min_lat_val + max_lat_val) / 2
-    center_lon = (min_lon_val + max_lon_val) / 2
-
+    # Add annotation for spot name
     fig.add_annotation(
-        x=center_lon,
-        y=center_lat,
-        text="Битцевский Парк",
+        x=(min_lon + max_lon) / 2,
+        y=max_lat,
+        text=f"<b>{spot.name}</b>",
         showarrow=False,
-        font=dict(size=20, color="black", family="Arial, sans-serif"),
-        yanchor="middle",
-        xanchor="center",
+        font=dict(size=14, color="black"),
         bgcolor="rgba(255, 255, 255, 0.7)",
         bordercolor="black",
         borderwidth=1,
-        borderpad=4
+        borderpad=4,
+        yref="paper",
+        yanchor="bottom"
     )
-    print_step("Map Drawing", "Добавлены границы и название леса.")
 
-def add_route_to_figure(fig: go.Figure, processed_route: ProcessedRoute, is_selected: bool = False, highlight_checkpoint: Optional[int] = None) -> None:
-    """Adds a route trace to the Plotly figure."""
-    route_lats = [p.lat for p in processed_route.smooth_points]
-    route_lons = [p.lon for p in processed_route.smooth_points]
-    route_elevations = processed_route.route.elevations
-
-    if not route_lats or not route_lons or not route_elevations:
-        print_step("Map Drawing", f"Пропускаю отрисовку маршрута '{processed_route.route.name}' из-за отсутствия данных.")
+def add_route_to_figure(
+    fig: go.Figure,
+    smooth_points: List[GeoPoint],
+    checkpoints: List[Checkpoint],
+    is_selected: bool,
+    highlight_checkpoint: Optional[int] = None
+) -> None:
+    """
+    Adds a route to the Plotly figure, with different styles for selected/unselected.
+    
+    Args:
+        fig (go.Figure): The Plotly figure to add the route to.
+        smooth_points (List[GeoPoint]): The smoothed geographical points of the route.
+        checkpoints (List[Checkpoint]): The checkpoints along the route.
+        is_selected (bool): True if this is the currently selected route, False otherwise.
+        highlight_checkpoint (Optional[int]): The index of the checkpoint to highlight, if any.
+    """
+    if not smooth_points:
         return
 
+    route_lats = [p.lat for p in smooth_points]
+    route_lons = [p.lon for p in smooth_points]
+    route_elevations = [p.elevation for p in smooth_points]
+
     if is_selected:
-        elevations_only = route_elevations
-        if elevations_only:
-            min_elev = min(elevations_only)
-            max_elev = max(elevations_only)
-            start_elev = elevations_only[0] if elevations_only else 0
+        # Add the main route trace (selected style)
+        fig.add_trace(go.Scattermap(
+            mode="lines",
+            lon=route_lons,
+            lat=route_lats,
+            marker={'size': 1},
+            line=dict(width=5, color='blue'),
+            hoverinfo='text',
+            hovertext=[f"Lat: {p.lat:.4f}<br>Lon: {p.lon:.4f}<br>Elevation: {p.elevation:.1f}m" for p in smooth_points],
+            showlegend=False,
+            name="Selected Route"
+        ))
 
-            if min_elev == max_elev:
-                plotly_colorscale = [[0, 'green'], [1, 'green']]
-                cmin_val = min_elev - 1 if min_elev > 0 else 0
-                cmax_val = max_elev + 1
-            else:
-                norm_start_elev = (start_elev - min_elev) / (max_elev - min_elev)
-                plotly_colorscale = [
-                    [0, 'blue'],
-                    [norm_start_elev, 'green'],
-                    [1, 'red']
-                ]
-                plotly_colorscale.sort(key=lambda x: x[0])
-                cmin_val = min_elev
-                cmax_val = max_elev
+        # Add checkpoints as markers on the selected route
+        if checkpoints:
+            cp_lats = [c.lat for c in checkpoints]
+            cp_lons = [c.lon for c in checkpoints]
+            cp_names = [c.name for c in checkpoints]
+            cp_distances = [c.distance_from_start for c in checkpoints]
+
+            marker_colors = ['green'] * len(checkpoints)
+            marker_sizes = [10] * len(checkpoints)
+            marker_line_width = [1] * len(checkpoints)
+            marker_line_color = ['black'] * len(checkpoints)
+
+            if highlight_checkpoint is not None and 0 <= highlight_checkpoint < len(checkpoints):
+                marker_colors[highlight_checkpoint] = 'gold'
+                marker_sizes[highlight_checkpoint] = 12
+                marker_line_width[highlight_checkpoint] = 2
+                marker_line_color[highlight_checkpoint] = 'black'
 
             fig.add_trace(go.Scattermap(
-                lat=route_lats,
-                lon=route_lons,
-                mode='lines+markers',
-                line=dict(width=6, color='rgba(0,0,0,0)'),
-                marker=dict(
-                    size=12,
-                    color=elevations_only,
-                    colorscale=plotly_colorscale,
-                    cmin=cmin_val,
-                    cmax=cmax_val,
-                    colorbar=dict(
-                        title="Высота (м)",
-                        x=1.02,
-                        lenmode="fraction",
-                        len=0.75
-                    )
-                ),
+                mode="markers",
+                lon=cp_lons,
+                lat=cp_lats,
+                marker={
+                    'size': marker_sizes,
+                    'color': marker_colors,
+                    'opacity': 1.0,
+                    'allowoverlap': True,
+                    'symbol': 'circle'
+                },
+                text=cp_names,
                 hoverinfo='text',
-                hovertext=[f"Высота: {elev:.1f} м" for elev in elevations_only],
+                hovertext=[f"Чекпоинт: {name}<br>Дистанция: {dist:.1f}м" 
+                        for name, dist in zip(cp_names, cp_distances)],
+                customdata=list(range(len(checkpoints))),
                 showlegend=False,
-                name=f"Маршрут {processed_route.route.name} (по высоте)"
+                name="Checkpoints"
             ))
-            print_step("Map Drawing", f"Отрисован выбранный маршрут '{processed_route.route.name}' с цветовой схемой высот.")
-        else:
-            print_step("Map Drawing", f"Пропускаю отрисовку выбранного маршрута '{processed_route.route.name}' по высоте: нет данных высот.")
-            fig.add_trace(go.Scattermap(
-                lat=route_lats,
-                lon=route_lons,
-                mode='lines',
-                line=dict(width=6, color='gray'),
-                hoverinfo='text',
-                hovertext=[f"Маршрут: {processed_route.route.name}" for _ in route_lats],
-                showlegend=False,
-                name=f"Маршрут {processed_route.route.name}"
-            ))
-
-        if processed_route.checkpoints:
-            checkpoint_lats = [cp.lat for cp in processed_route.checkpoints]
-            checkpoint_lons = [cp.lon for cp in processed_route.checkpoints]
-            checkpoint_names = [cp.name for cp in processed_route.checkpoints]
-            checkpoint_elevations = [cp.elevation for cp in processed_route.checkpoints]
-            checkpoint_indices = list(range(len(processed_route.checkpoints)))
-
-            fig.add_trace(go.Scattermap(
-                lat=checkpoint_lats,
-                lon=checkpoint_lons,
-                mode='markers',
-                marker=dict(
-                    size=16,
-                    symbol='circle',
-                    color='lime',
-                    opacity=1.0
-                ),
-                text=checkpoint_names,
-                hoverinfo='text',
-                hovertext=[f"{name}<br>Высота: {elev:.1f} м" for name, elev in zip(checkpoint_names, checkpoint_elevations)],
-                customdata=checkpoint_indices,
-                showlegend=False,
-                name="Чекпоинты"
-            ))
-            print_step("Map Drawing", f"Отрисованы чекпоинты для выбранного маршрута '{processed_route.route.name}'.")
-
-        if highlight_checkpoint is not None and highlight_checkpoint < len(processed_route.checkpoints):
-            checkpoint = processed_route.checkpoints[highlight_checkpoint]
-
-            fig.add_trace(go.Scattermap(
-                lat=[checkpoint.lat],
-                lon=[checkpoint.lon],
-                mode='markers',
-                marker=dict(
-                    size=22,
-                    symbol='circle',
-                    color='red',
-                    opacity=1.0,
-                ),
-                name="Выбранный чекпоинт",
-                hoverinfo='text',
-                hovertext=f"{checkpoint.name}<br>Высота: {checkpoint.elevation:.1f} м",
-                showlegend=False
-            ))
-            print_step("Map Drawing", f"Отрисован выделенный чекпоинт {highlight_checkpoint} на маршруте '{processed_route.route.name}'.")
-
     else:
+        # Non-selected route gets simple gray line
         fig.add_trace(go.Scattermap(
             lat=route_lats,
             lon=route_lons,
             mode='lines',
             line=dict(width=3, color='rgba(100, 100, 100, 0.5)'),
             hoverinfo='text',
-            hovertext=f"Маршрут: {processed_route.route.name}",
+            hovertext=f"Маршрут: {smooth_points[0].lat:.4f}, {smooth_points[0].lon:.4f} (first point)",
             showlegend=False,
-            name=processed_route.route.name
+            name="Unselected Route"
         ))
-        print_step("Map Drawing", f"Отрисован невыбранный маршрут '{processed_route.route.name}'.")
+
+def create_base_map(spot: Spot, routes: List[ProcessedRoute], selected_route_index: int = 0) -> go.Figure:
+    """Creates a base map with spot boundaries and all routes."""
+    fig = go.Figure()
+
+    # Add spot boundaries
+    add_spot_boundary_to_figure(fig, spot)
+
+    # Add all routes (non-selected style)
+    for i, route in enumerate(routes):
+        add_route_to_figure(
+            fig,
+            route.smooth_points,
+            route.checkpoints,
+            is_selected=(i == selected_route_index)
+        )
+
+    # Set map layout
+    all_lats = []
+    all_lons = []
+    for route in routes:
+        all_lats.extend([p.lat for p in route.smooth_points])
+        all_lons.extend([p.lon for p in route.smooth_points])
+
+    if all_lats and all_lons:
+        center_lat = np.mean(all_lats)
+        center_lon = np.mean(all_lons)
+        zoom = calculate_zoom(all_lats, all_lons)
+    else:
+        min_lon, min_lat, max_lon, max_lat = spot.bounds
+        center_lat = (min_lat + max_lat) / 2
+        center_lon = (min_lon + max_lon) / 2
+        zoom = calculate_zoom([min_lat, max_lat], [min_lon, max_lon])
+
+    fig.update_layout(
+        mapbox=dict(
+            style="open-street-map",
+            center=dict(
+                lat=center_lat,
+                lon=center_lon
+            ),
+            zoom=zoom
+        ),
+        margin={"r":0,"t":0,"l":0,"b":0},
+        hovermode="closest"
+    )
+
+    return fig
