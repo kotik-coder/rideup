@@ -1,8 +1,11 @@
+# map_visualization.py (updated)
 import plotly.graph_objects as go
 import numpy as np
-from typing import List, Optional, Dict
+from typing import List, Optional
 from map_helpers import print_step
 from route import GeoPoint
+from route_processor import ProcessedRoute
+from checkpoints import Checkpoint
 
 def calculate_zoom(lats: List[float], lons: List[float]) -> int:
     """Calculate zoom level based on geographic coverage."""
@@ -59,18 +62,18 @@ def add_forest_boundary_and_name_to_figure(fig: go.Figure, bounds: List[float]) 
     )
     print_step("Map Drawing", "Добавлены границы и название леса.")
 
-def add_route_to_figure(fig, route_dict, is_selected=False, highlight_checkpoint=None):
+def add_route_to_figure(fig: go.Figure, processed_route: ProcessedRoute, is_selected: bool = False, highlight_checkpoint: Optional[int] = None) -> None:
     """Adds a route trace to the Plotly figure."""
-    route_lats = [p[0] for p in route_dict['smooth_points']]
-    route_lons = [p[1] for p in route_dict['smooth_points']]
-    route_elevations = route_dict['elevation_profile']
+    route_lats = [p.lat for p in processed_route.smooth_points]
+    route_lons = [p.lon for p in processed_route.smooth_points]
+    route_elevations = processed_route.route.elevations
 
     if not route_lats or not route_lons or not route_elevations:
-        print_step("Map Drawing", f"Пропускаю отрисовку маршрута '{route_dict.get('name', 'N/A')}' из-за отсутствия данных.")
+        print_step("Map Drawing", f"Пропускаю отрисовку маршрута '{processed_route.route.name}' из-за отсутствия данных.")
         return
 
     if is_selected:
-        elevations_only = [ep['elevation'] for ep in route_elevations]
+        elevations_only = route_elevations
         if elevations_only:
             min_elev = min(elevations_only)
             max_elev = max(elevations_only)
@@ -110,30 +113,30 @@ def add_route_to_figure(fig, route_dict, is_selected=False, highlight_checkpoint
                     )
                 ),
                 hoverinfo='text',
-                hovertext=[f"Высота: {ep['elevation']:.1f} м" for ep in route_elevations],
+                hovertext=[f"Высота: {elev:.1f} м" for elev in elevations_only],
                 showlegend=False,
-                name=f"Маршрут {route_dict['name']} (по высоте)"
+                name=f"Маршрут {processed_route.route.name} (по высоте)"
             ))
-            print_step("Map Drawing", f"Отрисован выбранный маршрут '{route_dict['name']}' с цветовой схемой высот.")
+            print_step("Map Drawing", f"Отрисован выбранный маршрут '{processed_route.route.name}' с цветовой схемой высот.")
         else:
-            print_step("Map Drawing", f"Пропускаю отрисовку выбранного маршрута '{route_dict['name']}' по высоте: нет данных высот.")
+            print_step("Map Drawing", f"Пропускаю отрисовку выбранного маршрута '{processed_route.route.name}' по высоте: нет данных высот.")
             fig.add_trace(go.Scattermap(
                 lat=route_lats,
                 lon=route_lons,
                 mode='lines',
                 line=dict(width=6, color='gray'),
                 hoverinfo='text',
-                hovertext=[f"Маршрут: {route_dict['name']}" for _ in route_lats],
+                hovertext=[f"Маршрут: {processed_route.route.name}" for _ in route_lats],
                 showlegend=False,
-                name=f"Маршрут {route_dict['name']}"
+                name=f"Маршрут {processed_route.route.name}"
             ))
 
-        if route_dict['checkpoints']:
-            checkpoint_lats = [cp['lat'] for cp in route_dict['checkpoints']]
-            checkpoint_lons = [cp['lon'] for cp in route_dict['checkpoints']]
-            checkpoint_names = [cp['name'] for cp in route_dict['checkpoints']]
-            checkpoint_elevations = [cp['elevation'] for cp in route_dict['checkpoints']]
-            checkpoint_indices = [idx for idx, cp in enumerate(route_dict['checkpoints'])]
+        if processed_route.checkpoints:
+            checkpoint_lats = [cp.lat for cp in processed_route.checkpoints]
+            checkpoint_lons = [cp.lon for cp in processed_route.checkpoints]
+            checkpoint_names = [cp.name for cp in processed_route.checkpoints]
+            checkpoint_elevations = [cp.elevation for cp in processed_route.checkpoints]
+            checkpoint_indices = list(range(len(processed_route.checkpoints)))
 
             fig.add_trace(go.Scattermap(
                 lat=checkpoint_lats,
@@ -152,14 +155,14 @@ def add_route_to_figure(fig, route_dict, is_selected=False, highlight_checkpoint
                 showlegend=False,
                 name="Чекпоинты"
             ))
-            print_step("Map Drawing", f"Отрисованы чекпоинты (теперь как круги для отладки) для выбранного маршрута '{route_dict['name']}'.")
+            print_step("Map Drawing", f"Отрисованы чекпоинты для выбранного маршрута '{processed_route.route.name}'.")
 
-        if highlight_checkpoint is not None and highlight_checkpoint < len(route_dict['checkpoints']):
-            checkpoint = route_dict['checkpoints'][highlight_checkpoint]
+        if highlight_checkpoint is not None and highlight_checkpoint < len(processed_route.checkpoints):
+            checkpoint = processed_route.checkpoints[highlight_checkpoint]
 
             fig.add_trace(go.Scattermap(
-                lat=[checkpoint['lat']],
-                lon=[checkpoint['lon']],
+                lat=[checkpoint.lat],
+                lon=[checkpoint.lon],
                 mode='markers',
                 marker=dict(
                     size=22,
@@ -169,10 +172,10 @@ def add_route_to_figure(fig, route_dict, is_selected=False, highlight_checkpoint
                 ),
                 name="Выбранный чекпоинт",
                 hoverinfo='text',
-                hovertext=f"{checkpoint['name']}<br>Высота: {checkpoint['elevation']:.1f} м",
+                hovertext=f"{checkpoint.name}<br>Высота: {checkpoint.elevation:.1f} м",
                 showlegend=False
             ))
-            print_step("Map Drawing", f"Отрисован выделенный чекпоинт {highlight_checkpoint} (теперь как круг для отладки) на маршруте '{route_dict['name']}'.")
+            print_step("Map Drawing", f"Отрисован выделенный чекпоинт {highlight_checkpoint} на маршруте '{processed_route.route.name}'.")
 
     else:
         fig.add_trace(go.Scattermap(
@@ -181,8 +184,8 @@ def add_route_to_figure(fig, route_dict, is_selected=False, highlight_checkpoint
             mode='lines',
             line=dict(width=3, color='rgba(100, 100, 100, 0.5)'),
             hoverinfo='text',
-            hovertext=f"Маршрут: {route_dict['name']}",
+            hovertext=f"Маршрут: {processed_route.route.name}",
             showlegend=False,
-            name=route_dict['name']
+            name=processed_route.route.name
         ))
-        print_step("Map Drawing", f"Отрисован невыбранный маршрут '{route_dict['name']}'.")
+        print_step("Map Drawing", f"Отрисован невыбранный маршрут '{processed_route.route.name}'.")

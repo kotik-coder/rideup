@@ -1,50 +1,40 @@
-from typing import List, Tuple, Dict
-
-# Assuming these are available in your project structure
+from typing import List, Dict, Tuple
+from dataclasses import dataclass
 from map_helpers import print_step
 from route import GeoPoint, Route
-from track import Track # Import Track to potentially use its velocity profile method
+from track import Track
+
+@dataclass
+class Segment:
+    """Represents a route segment between two checkpoints"""
+    distance: float  # in meters
+    elevation_gain: float
+    elevation_loss: float
+    net_elevation: float
+    min_elevation: float
+    max_elevation: float
+    start_checkpoint_index: int
+    end_checkpoint_index: int
 
 class StatisticsCollector:
-    """
-    Collects and generates various statistical profiles and analyses for routes and tracks,
-    such as elevation profiles.
-    """
+    """Collects and generates various statistical profiles and analyses for routes and tracks."""
     def __init__(self):
         print_step("StatisticsCollector", "StatisticsCollector initialized.")
         
-    def generate_route_profiles(self, route : Route, associated_tracks: List[Track]) -> Dict[str, any]:
+    def generate_route_profiles(self, route: Route, associated_tracks: List[Track]) -> Dict[str, any]:
         """
         Generates both elevation and velocity profiles for a route.
-        
-        Args:
-            route: The Route object to process
-            associated_tracks: List of tracks associated with this route
-            
-        Returns:
-            Dictionary containing both profiles:
-            {
-                'elevation_profile': List[Dict],
-                'velocity_profile': List[Dict]
-            }
+        Returns dictionary containing both profiles.
         """
         profiles = {
-            'elevation_profile': [],
-            'velocity_profile': []
-        }
-        
-        # Generate elevation profile
-        if route.points and route.elevations:
-            profiles['elevation_profile'] = self.create_elevation_profile(
+            'elevation_profile': self.create_elevation_profile(
                 [(p.lat, p.lon) for p in route.points],
                 route.elevations
-            )
-        
-        # Generate velocity profile from first associated track
-        if associated_tracks:
-            profiles['velocity_profile'] = self.create_velocity_profile_from_track(associated_tracks[0])
-        
+            ) if route.points and route.elevations else [],
+            'velocity_profile': self.create_velocity_profile_from_track(associated_tracks[0]) if associated_tracks else []
+        }
         return profiles
+
 
     def create_elevation_profile(self, points: List[Tuple[float, float]], elevations: List[float]) -> List[Dict[str, float]]:
         """

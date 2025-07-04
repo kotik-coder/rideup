@@ -1,21 +1,31 @@
+# route_processor.py
 import numpy as np
 from scipy.interpolate import Akima1DInterpolator, interp1d
-from typing import List, Dict, Tuple
+from typing import List, Tuple
+from dataclasses import dataclass
 from map_helpers import print_step
 from route import GeoPoint, Route
-from statistics_collector import StatisticsCollector, get_landscape_description
-from checkpoints import CheckpointGenerator
+from statistics_collector import StatisticsCollector, get_landscape_description, Segment
+from checkpoints import Checkpoint, CheckpointGenerator
 from track import Track
 
 PHOTO_CHECKPOINT_DISTANCE_THRESHOLD = 50.0  # meters
 
+@dataclass
+class ProcessedRoute:
+    """Contains the original route and processed data"""
+    route: Route
+    smooth_points: List[GeoPoint]  # Interpolated points
+    segments: List[Segment]
+    checkpoints: List[Checkpoint]
+
 class RouteProcessor:
-    def __init__(self, local_photos: List[Dict[str, any]], route_to_tracks: Dict[str, List[Track]]):
+    def __init__(self, local_photos: List[dict], route_to_tracks: dict[str, List[Track]]):
         self.checkpoint_generator = CheckpointGenerator(local_photos)
         self.route_to_tracks = route_to_tracks
         self.stats_collector = StatisticsCollector()
 
-    def process_route(self, route: Route) -> Dict[str, any]:
+    def process_route(self, route: Route) -> ProcessedRoute:
         """Main processing pipeline for a route."""
         print_step("RouteProcessor", f"Starting processing for route: {route.name}")
 
@@ -25,58 +35,77 @@ class RouteProcessor:
         associated_tracks = self.route_to_tracks.get(route.name, [])
         
         checkpoints = self.checkpoint_generator.generate_checkpoints(
-            smooth_points, 
+            [(p.lat, p.lon) for p in smooth_points],
             smooth_elevations,
             associated_tracks
         )
         print_step("RouteProcessor", f"Route '{route.name}': Generated {len(checkpoints)} checkpoints.")
         
-        segments = self._calculate_segments_and_enrich_descriptions(
-            checkpoints, 
-            smooth_elevations
-        )
-        print_step("RouteProcessor", f"Route '{route.name}': Generated {len(segments)} segments.")
-        
-        profiles = self.stats_collector.generate_route_profiles(
-            route, 
-            associated_tracks
-        )
-
-        return {
-            'name': route.name,
-            'checkpoints': checkpoints,
-            'segments': segments,
-            'elevation_profile': profiles['elevation_profile'],
-            'velocity_profile': profiles['velocity_profile'],
-            'raw_points': [(p.lat, p.lon) for p in route.points],
-            'raw_elevations': route.elevations,
-            'smooth_points': smooth_points
-        }
-
-    def _calculate_segments_and_enrich_descriptions(self, checkpoints: List[Dict[str, any]], 
-                                                  smooth_elevations: List[float]) -> List[Dict[str, any]]:
-        """Calculate route segments and enrich checkpoint descriptions with segment info."""
         segments = self._calculate_segments(checkpoints, smooth_elevations)
-        
-        for i in range(len(checkpoints)):
-            cp = checkpoints[i]
-            if i < len(segments):  # For start and intermediate points of segments
-                segment_info = segments[i]
-                cp['description'] = get_landscape_description(
-                    current_elevation=cp['elevation'],
-                    segment_net_elevation_change=segment_info['net_elevation'],
-                    segment_elevation_gain=segment_info['elevation_gain'],
-                    segment_elevation_loss=segment_info['elevation_loss'],
-                    segment_distance=segment_info['distance']
+        self._enrich_descriptions(checkpoints, segments)
+
+        print_step("RouteProcessor", f"Route '{route.name}': Generated {len(segments)} segments.")
+
+        return ProcessedRoute(
+            route=route,
+            smooth_points=smooth_points,
+            segments=segments,
+            checkpoints=checkpoints
+        )
+
+    def _enrich_descriptions(self, checkpoints: List[Checkpoint], segments : List[Segment]) :
+        for i, checkpoint in enumerate(checkpoints):
+            if i < len(segments):
+                segment = segments[i]
+                checkpoint.description = get_landscape_description(
+                    current_elevation=checkpoint.elevation,
+                    segment_net_elevation_change=segment.net_elevation,
+                    segment_elevation_gain=segment.elevation_gain,
+                    segment_elevation_loss=segment.elevation_loss,
+                    segment_distance=segment.distance
                 )
-            elif i == len(checkpoints) - 1 and len(checkpoints) > 1:
-                cp['description'] = "End of route."
+            elif i == len(checkpoints) - 1:
+                checkpoint.description = "End of route."
             else:
-                cp['description'] = "Start of route."
+                checkpoint.description = "Start of route."
         
         return segments
     
-    def _create_smooth_route(self, route: Route) -> Tuple[List[Tuple[float, float]], List[float]]:
+    def _calculate_segments(self, checkpoints: List[Checkpoint], elevations: List[float]) -> List[Segment]:
+        """Calculates segments between consecutive checkpoints."""
+        if len(checkpoints) < 2:
+            print_step("RouteProcessor", "Segment calculation: Not enough checkpoints. Returning empty list.")
+            return []
+
+        segments = []
+        for i in range(1, len(checkpoints)):
+            start_cp = checkpoints[i-1]
+            end_cp = checkpoints[i]
+
+            start_idx = start_cp.point_index
+            end_idx = end_cp.point_index
+
+            segment_elevations = elevations[start_idx:end_idx+1]
+            if not segment_elevations:
+                print_step("RouteProcessor", f"Segment calculation: Segment from {start_idx} to {end_idx} has no elevation data. Skipping.", level="WARNING")
+                continue
+
+            min_seg_elevation = min(segment_elevations)
+            max_seg_elevation = max(segment_elevations)
+            
+            segments.append(Segment(
+                distance=end_cp.distance_from_start - start_cp.distance_from_start,
+                elevation_gain=max(0, max_seg_elevation - start_cp.elevation),
+                elevation_loss=max(0, start_cp.elevation - min_seg_elevation),
+                net_elevation=end_cp.elevation - start_cp.elevation,
+                min_elevation=min_seg_elevation,
+                max_elevation=max_seg_elevation,
+                start_checkpoint_index=start_cp.position - 1,
+                end_checkpoint_index=end_cp.position - 1
+            ))
+        return segments
+
+    def _create_smooth_route(self, route: Route) -> Tuple[List[GeoPoint], List[float]]:
         """
         Creates a smoothed version of the route's points and elevations using
         linear or Akima spline interpolation based on point density.
@@ -86,7 +115,7 @@ class RouteProcessor:
         
         if len(route.points) < 4:
             print_step("Smoothing", f"Route '{route.name}': <4 points, returning raw points")
-            return [(p.lat, p.lon) for p in route.points], route.elevations
+            return route.points.copy(), route.elevations.copy()
 
         points = np.array([(p.lat, p.lon) for p in route.points])
         elevations = np.array(route.elevations)
@@ -108,7 +137,7 @@ class RouteProcessor:
                 f"avg spacing {avg_distance:.1f}m → {method} interpolation")
 
         if distances[-1] == 0:
-            return [(p.lat, p.lon) for p in route.points], route.elevations
+            return route.points.copy(), route.elevations.copy()
 
         t = distances / distances[-1]
         num_smooth_points = max(100, int(distances[-1] / 10))
@@ -124,49 +153,15 @@ class RouteProcessor:
                 interp_lon = Akima1DInterpolator(t, points[:, 1])
                 interp_elev = Akima1DInterpolator(t, elevations)
 
-            smooth_points = list(zip(
-                interp_lat(t_smooth),
-                interp_lon(t_smooth)
-            ))
+            smooth_points = [
+                GeoPoint(lat, lon) 
+                for lat, lon in zip(
+                    interp_lat(t_smooth),
+                    interp_lon(t_smooth)
+                )
+            ]
             return smooth_points, interp_elev(t_smooth).tolist()
 
         except Exception as e:
             print_step("Error", f"Smoothing failed for {route.name}: {str(e)}", level="ERROR")
-            return [(p.lat, p.lon) for p in route.points], route.elevations
-
-    def _calculate_segments(self, checkpoints: List[Dict[str, any]], elevations: List[float]) -> List[Dict[str, any]]:
-        """
-        Calculates segments between consecutive checkpoints, including distance and
-        elevation changes within each segment.
-        """
-        segments = []
-        if not checkpoints or len(checkpoints) < 2:
-            print_step("RouteProcessor", "Segment calculation: No checkpoints or too few. Returning empty list.")
-            return []
-
-        for i in range(1, len(checkpoints)):
-            start_cp = checkpoints[i-1]
-            end_cp = checkpoints[i]
-
-            start_idx = start_cp['point_index']
-            end_idx = end_cp['point_index']
-
-            segment_elevations = elevations[start_idx:end_idx+1]
-            if not segment_elevations:
-                print_step("RouteProcessor", f"Segment calculation: Segment from {start_idx} to {end_idx} has no elevation data. Skipping.", level="WARNING")
-                continue
-
-            min_seg_elevation = min(segment_elevations)
-            max_seg_elevation = max(segment_elevations)
-            
-            segments.append({
-                'distance': end_cp.get('distance_from_start', 0) - start_cp.get('distance_from_start', 0),
-                'elevation_gain': max(0, max_seg_elevation - start_cp['elevation']),
-                'elevation_loss': max(0, start_cp['elevation'] - min_seg_elevation),
-                'net_elevation': end_cp['elevation'] - start_cp['elevation'],
-                'min_segment_elevation': min_seg_elevation,
-                'max_segment_elevation': max_seg_elevation,
-                'start_checkpoint': start_cp['position'] - 1,
-                'end_checkpoint': end_cp['position'] - 1
-            })
-        return segments
+            return route.points.copy(), route.elevations.copy()

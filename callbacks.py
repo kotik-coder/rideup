@@ -1,10 +1,12 @@
+import traceback
 import dash
 from dash import Input, Output, State
 import json
 import numpy as np
 import plotly.graph_objects as go
 from map_helpers import print_step
-from route import GeoPoint
+from route import GeoPoint, Route
+from route_processor import ProcessedRoute
 from map_visualization import *
 from graph_generation import *
 from ui_components import create_checkpoint_card
@@ -23,33 +25,47 @@ def setup_callbacks(app, spot, spot_loader, route_processor):
     )
     def load_initial_route_data(_):
         """Loads route data and populates route selector options on initial app load."""
-        print_step("Callback", "Загружаю начальные данные маршрутов...")
+        print_step("Callback", "Loading initial route data...")
         route_data = []
         options = []
         
-        # Load routes and tracks through SpotLoader
         spot_loader.load_valid_routes_and_tracks()
-        
-        # Update RouteProcessor with loaded data
         route_processor.local_photos = spot.local_photos
         route_processor.route_to_tracks = spot._route_to_tracks
         
         if spot.routes:
-            print_step("Callback", f"Найдено {len(spot.routes)} маршрутов для обработки.")
+            print_step("Callback", f"Found {len(spot.routes)} routes to process")
             for i, route in enumerate(spot.routes):
                 try:
-                    route_dict = route_processor.process_route(route)
-                    if route_dict and route_dict.get('smooth_points') and route_dict.get('checkpoints'):
-                        route_data.append(route_dict)
+                    processed_route = route_processor.process_route(route)
+                    if processed_route and processed_route.smooth_points and processed_route.checkpoints:
+                        # Store both the processed route and serialized data
+                        route_data.append({
+                            'processed_route': processed_route,
+                            'serialized': {
+                                'name': processed_route.route.name,
+                                'checkpoints': [cp.to_dict() for cp in processed_route.checkpoints],
+                                'segments': [{
+                                    'distance': s.distance,
+                                    'elevation_gain': s.elevation_gain,
+                                    'elevation_loss': s.elevation_loss,
+                                    'net_elevation': s.net_elevation,
+                                    'min_segment_elevation': s.min_elevation,
+                                    'max_segment_elevation': s.max_elevation,
+                                    'start_checkpoint': s.start_checkpoint_index,
+                                    'end_checkpoint': s.end_checkpoint_index
+                                } for s in processed_route.segments],
+                                'elevation_profile': processed_route.route.elevations,
+                                'velocity_profile': []
+                            }
+                        })
                         options.append({'label': route.name, 'value': i})
-                        print_step("Callback", f"Маршрут '{route.name}' успешно обработан и добавлен.")
-                    else:
-                        print_step("Callback", f"Маршрут '{route.name}' обработан, но данные пусты или неполные. Пропускаю.", level="WARN")
                 except Exception as e:
-                    print_step("Callback", f"Ошибка при обработке маршрута '{route.name}': {e}", level="ERROR")
+                    print_step("Callback", f"Error processing route '{route.name}': {e}", level="ERROR")
+                    print(traceback.format_exc())
 
-        print_step("Callback", f"Всего обработано и добавлено {len(route_data)} маршрутов.")
-        return json.dumps(route_data), options
+        print_step("Callback", f"Processed {len(route_data)} routes")
+        return json.dumps(route_data, default=lambda x: x.__dict__ if hasattr(x, '__dict__') else str(x)), options
 
     @app.callback(
         Output('selected-route-index', 'data'),
@@ -104,82 +120,49 @@ def setup_callbacks(app, spot, spot_loader, route_processor):
         fig = go.Figure(current_figure)
 
         if not route_data_json:
-            print_step("Callback", "update_map_figure: route_data_json is empty, returning current figure.")
             return fig
 
         route_data = json.loads(route_data_json)
-        print_step("Callback", f"update_map_figure: Processing with {len(route_data)} routes.")
-
         triggered_id = dash.callback_context.triggered[0]['prop_id'].split('.')[0] if dash.callback_context.triggered else None
 
-        if not hasattr(fig.layout, 'meta') or not isinstance(fig.layout.meta, dict):
-            fig.layout.meta = {}
-
-        prev_centered_route_index = fig.layout.meta.get('last_centered_route_index', None)
-        should_update_center_and_zoom = False
-        current_centered_route_index = None
-
-        if triggered_id is None:
-            should_update_center_and_zoom = True
-            current_centered_route_index = route_index
-            print_step("Callback", "Initial load, updating map center and zoom.")
-        elif triggered_id == 'selected-route-index':
-            if route_index != prev_centered_route_index:
-                should_update_center_and_zoom = True
-                current_centered_route_index = route_index
-                print_step("Callback", "New route selected (or route deselected), updating map center and zoom.")
-            else:
-                print_step("Callback", "Same route re-selected, maintaining current map center and zoom.")
-        elif triggered_id == 'selected-checkpoint-index':
-            should_update_center_and_zoom = False
-            print_step("Callback", "Checkpoint selected, maintaining current map center and zoom.")
-
-        fig.data = []
-
-        if not fig.layout.map.layers:
-            fig.update_layout(map_style="open-street-map")
-
-        if should_update_center_and_zoom:
-            if current_centered_route_index is not None and current_centered_route_index < len(route_data):
-                selected_route = route_data[current_centered_route_index]
-                if selected_route['smooth_points']:
-                    lats = [p[0] for p in selected_route['smooth_points']]
-                    lons = [p[1] for p in selected_route['smooth_points']]
-
-                    center_lat = (min(lats) + max(lats)) / 2
-                    center_lon = (min(lons) + max(lons)) / 2
-                    zoom = calculate_zoom(lats, lons) # Use imported calculate_zoom
-
-                    fig.update_layout(
-                        map_center={'lat': center_lat, 'lon': center_lon},
-                        map_zoom=zoom
-                    )
-                    print_step("Callback", f"Zooming to selected route: {selected_route['name']}")
-            else:                
-                min_lon_val, min_lat_val, max_lon_val, max_lat_val = spot.bounds # Access route_manager bounds
-                center_lat = (min_lat_val + max_lat_val) / 2
-                center_lon = (min_lon_val + max_lon_val) / 2
-                zoom = calculate_zoom([min_lat_val, max_lat_val], [min_lon_val, max_lon_val])
+        # Handle zoom and center updates
+        if triggered_id in [None, 'selected-route-index']:
+            if route_index is not None and route_index < len(route_data):
+                route_info = route_data[route_index]
+                processed_route = route_info['processed_route']
+                lats = [p.lat for p in processed_route.smooth_points]
+                lons = [p.lon for p in processed_route.smooth_points]
+                
+                center_lat = (min(lats) + max(lats)) / 2
+                center_lon = (min(lons) + max(lons)) / 2
+                zoom = calculate_zoom(lats, lons)
+                
                 fig.update_layout(
                     map_center={'lat': center_lat, 'lon': center_lon},
                     map_zoom=zoom
                 )
-                add_forest_boundary_and_name_to_figure(fig, spot.bounds) # Use imported function
-                print_step("Callback", "Zooming to forest bounds (no route selected).")
+            else:
+                min_lon, min_lat, max_lon, max_lat = spot.bounds
+                center_lat = (min_lat + max_lat) / 2
+                center_lon = (min_lon + max_lon) / 2
+                zoom = calculate_zoom([min_lat, max_lat], [min_lon, max_lon])
+                
+                fig.update_layout(
+                    map_center={'lat': center_lat, 'lon': center_lon},
+                    map_zoom=zoom
+                )
+                add_forest_boundary_and_name_to_figure(fig, spot.bounds)
 
-            fig.layout.meta['last_centered_route_index'] = current_centered_route_index
-
-        for i, route_dict in enumerate(route_data):
-            if i != route_index:
-                add_route_to_figure(fig, route_dict, is_selected=False) # Use imported function
-
-        if route_index is not None and route_index < len(route_data):
-            selected_route_dict = route_data[route_index]
+        # Draw all routes
+        fig.data = []
+        for i, route_info in enumerate(route_data):
+            processed_route = route_info['processed_route']
+            is_selected = i == route_index
             add_route_to_figure(
                 fig,
-                selected_route_dict,
-                is_selected=True,
-                highlight_checkpoint=checkpoint_index
+                processed_route,
+                is_selected=is_selected,
+                highlight_checkpoint=checkpoint_index if is_selected else None
             )
 
         return fig
