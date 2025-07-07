@@ -1,6 +1,8 @@
 import plotly.graph_objects as go
 import numpy as np
-from map_helpers import print_step # For logging, if needed
+from map_helpers import print_step
+from statistics_collector import ProfilePoint # For logging, if needed
+from typing import List
 
 def get_fill_polygons(distances, values, threshold_value):
     """
@@ -59,3 +61,79 @@ def calculate_velocity_quartiles(velocities):
     median = np.percentile(velocities_np, 50)
     q3 = np.percentile(velocities_np, 75)
     return q1, median, q3
+
+# graph_generation.py
+import plotly.graph_objects as go
+import numpy as np
+from statistics_collector import ProfilePoint
+from typing import List, Optional
+
+def create_elevation_profile_figure(profile_points: List[ProfilePoint],
+                                  highlight_distance: Optional[float] = None) -> go.Figure:
+    """Create elevation profile visualization."""
+    fig = go.Figure()
+    
+    if profile_points:
+        distances = [p.distance for p in profile_points]
+        elevations = [p.elevation for p in profile_points]
+        
+        fig.add_trace(go.Scatter(
+            x=distances,
+            y=elevations,
+            mode='lines',
+            line_color='blue',
+            name='Elevation'
+        ))
+
+        if highlight_distance is not None:
+            idx = np.argmin(np.abs(np.array(distances) - highlight_distance))
+            fig.add_trace(go.Scatter(
+                x=[distances[idx]],
+                y=[elevations[idx]],
+                mode='markers',
+                marker=dict(size=12, color='gold'),
+                name='Highlight'
+            ))
+
+    fig.update_layout(
+        xaxis_title='Distance (m)',
+        yaxis_title='Elevation (m)',
+        margin=dict(l=20, r=20, t=40, b=20),
+        height=250
+    )
+    return fig
+
+def create_velocity_profile_figure(profile_points: List[ProfilePoint],
+                                 highlight_distance: Optional[float] = None) -> go.Figure:
+    """Create velocity profile visualization."""
+    fig = go.Figure()
+    
+    if profile_points:
+        distances = [p.distance for p in profile_points]
+        velocities = [p.velocity * 3.6 if p.velocity else 0 for p in profile_points]  # Convert m/s to km/h
+        
+        fig.add_trace(go.Scatter(
+            x=distances,
+            y=velocities,
+            mode='lines',
+            line_color='green',
+            name='Velocity'
+        ))
+
+        if highlight_distance is not None:
+            idx = np.argmin(np.abs(np.array(distances) - highlight_distance))
+            fig.add_trace(go.Scatter(
+                x=[distances[idx]],
+                y=[velocities[idx]],
+                mode='markers',
+                marker=dict(size=12, color='gold'),
+                name='Highlight'
+            ))
+
+    fig.update_layout(
+        xaxis_title='Distance (m)',
+        yaxis_title='Velocity (km/h)',
+        margin=dict(l=20, r=20, t=40, b=20),
+        height=250
+    )
+    return fig

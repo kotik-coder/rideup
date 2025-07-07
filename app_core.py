@@ -55,22 +55,19 @@ class BitsevskyMapApp:
             local_photos=self.spot.local_photos,
             all_tracks=self.spot.tracks
         )
+        
+        # Pre-process all routes during initialization
+        self.processed_routes = []
+        for route in self.spot.routes:
+            self.processed_routes.append(self.route_processor.process_route(route))
 
-        print_step("Core", "Processing initial routes")
-        # Process initial routes
-        self.processed_routes: List[ProcessedRoute] = [
-            self.route_processor.process_route(route)
-            for route in self.spot.routes
-        ]
-
-        self.selected_route_index = 0 if self.processed_routes else None
+        self.selected_route_index = 0 if self.spot.routes else None
         self.selected_checkpoint_index = None
 
         print_step("Core", "Setting up UI layout")
         # Setup layout with spot and initial routes
         self.app.layout = setup_layout(
-            spot=self.spot,
-            routes=self.processed_routes
+            spot=self.spot
         )
         
         print_step("Core", "Setting up callbacks")
@@ -79,7 +76,8 @@ class BitsevskyMapApp:
             app=self.app,
             spot=self.spot,
             spot_loader=self.spot_loader,
-            route_processor=self.route_processor
+            route_processor=self.route_processor,
+            processed_routes=self.processed_routes
         )
 
     def _print_header(self):
