@@ -1,5 +1,6 @@
 import random
 import math
+import numpy as np
 import requests
 import time
 import json
@@ -103,7 +104,6 @@ def get_boundary_point(polygon: Polygon, bounds: List[float]) -> Tuple[float, fl
             
     # Fallback: if no point on boundary is found, return a corner or center of bounds
     return (float(min_lat), float(min_lon)) # Default to bottom-left corner
-
 
 def generate_nearby_point(reference_point: Tuple[float, float], polygon: Polygon, max_distance: float, bounds: List[float]) -> Optional[Tuple[float, float]]:
     """Генерация точки в пределах расстояния от reference_point внутри полигона."""

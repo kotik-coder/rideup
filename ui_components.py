@@ -1,7 +1,11 @@
 import dash_bootstrap_components as dbc
 from dash import html
+import numpy as np
 
-def create_route_info_card(processed_route):
+from checkpoints import Checkpoint
+from route_processor import ProcessedRoute
+
+def create_route_info_card(processed_route : ProcessedRoute):
     """
     Generates a Dash Bootstrap Components card for displaying route information.
     
@@ -15,7 +19,7 @@ def create_route_info_card(processed_route):
         html.H5(processed_route.route.name, className="mb-1 fs-6"),
         html.P(f"Длина маршрута: {processed_route.route.total_distance:.2f} м", 
               className="mb-1", style={'fontSize': '0.9em'}),
-        html.P(f"Средняя высота: {np.mean([p.elevation for p in processed_route.points]):.1f} м", 
+        html.P(f"Средняя высота: {np.mean([e for e in processed_route.route.elevations]):.1f} м", 
               className="mb-1", style={'fontSize': '0.9em'}),
         html.P(f"Набор высоты: {sum(s.elevation_gain for s in processed_route.segments):.1f} м", 
               className="mb-1", style={'fontSize': '0.9em'}),
@@ -23,7 +27,7 @@ def create_route_info_card(processed_route):
               className="mb-0", style={'fontSize': '0.9em'}),
     ])
 
-def create_checkpoint_card(checkpoint):
+def create_checkpoint_card(checkpoint : Checkpoint):
     """
     Generates a Dash Bootstrap Components card for displaying checkpoint information.
     Now accepts a Checkpoint object instead of a dictionary.

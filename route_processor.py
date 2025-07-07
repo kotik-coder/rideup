@@ -5,6 +5,7 @@ from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from map_helpers import print_step
 from route import GeoPoint, Route
+from spot import Spot
 from statistics_collector import StatisticsCollector, get_landscape_description, Segment
 from checkpoints import Checkpoint, CheckpointGenerator
 from track import Track
