@@ -1,7 +1,9 @@
 # callbacks.py
-from dash import Input, Output
+from dash import Input, Output, State
+import plotly.graph_objects as go
 import dash
 from map_helpers import print_step
+from map_visualization import update_map_for_selected_route
 from route_processor import ProcessedRoute, RouteProcessor
 from spot import SpotLoader, Spot
 from typing import List
@@ -33,31 +35,25 @@ def setup_callbacks(app, spot: Spot, spot_loader: SpotLoader, route_processor: R
     
     @app.callback(
         Output('selected-route-index', 'data'),
+        Output('route-general-info', 'children'),
+        Output('map-graph', 'figure'),
         Input('route-selector', 'value'),
+        State('map-graph', 'figure'),
         prevent_initial_call=True
     )
-    def handle_route_selection(selected_route_index: int):
-        """Processes the selected route and stores the processed data."""
+    def handle_route_selection(selected_route_index: int, current_map_figure: dict):
+        """Processes the selected route and updates the UI directly."""
         if selected_route_index is None:
-            return dash.no_update, dash.no_update
-            
+            return dash.no_update, dash.no_update, dash.no_update # Added an extra dash.no_update
+
         print_step("Callbacks", f"Processing selected route index: {selected_route_index}")
-        selected_route  = spot.routes[selected_route_index]
+        selected_route = spot.routes[selected_route_index]
         processed_route = route_processor.process_route(selected_route)
 
-        create_route_info_card(processed_route) # This line can be removed as update_route_info handles it
+        # Generate the UI components using create_route_info_card
+        route_info_ui = create_route_info_card(processed_route)
+        
+        # Update the map using the new helper function
+        updated_map_figure = update_map_for_selected_route(current_map_figure, spot, processed_route)
 
-        return selected_route_index
-
-    @app.callback(
-        Output('route-general-info', 'children'),
-        Input('route-data-store', 'data'),
-        prevent_initial_call=True
-    )
-    def update_route_info(processed_route_data):
-        """Updates the route information card with the selected route's data."""
-        if processed_route_data is None:
-            return dash.no_update
-            
-        from ui_components import create_route_info_card
-        return create_route_info_card(processed_route_data)
+        return selected_route_index, route_info_ui, updated_map_figure

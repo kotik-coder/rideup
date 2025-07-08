@@ -69,8 +69,7 @@ class CheckpointGenerator:
         self.local_photos = local_photos
 
     def generate_checkpoints(self,
-                             smooth_route: List[Tuple[float, float]],
-                             route_elevations: List[float],
+                             smooth_route: List[GeoPoint],
                              associated_tracks: List[Track]) -> List[Checkpoint]:
         """
         Main method to generate all checkpoints for a route.
@@ -91,30 +90,22 @@ class CheckpointGenerator:
 
         return self._create_checkpoints_from_markers(
             smooth_route,
-            route_elevations,
             distances,
             marker_indices,
             photo_checkpoints_data # Pass photo checkpoint data
         )
 
-    def _calculate_smooth_route_distances(self, smooth_route: List[Tuple[float, float]]) -> List[float]:
-        """
-        Calculate cumulative distances along the smooth route.
-        Args:
-            smooth_route: A list of (latitude, longitude) tuples.
-        Returns:
-            A list where each element is the cumulative distance from the start of the route
-            to the corresponding point in smooth_route.
-        """
+    def _calculate_smooth_route_distances(self, smooth_route: List[GeoPoint]) -> List[float]:
+
         distances = [0.0]
         for i in range(1, len(smooth_route)):
-            p1 = GeoPoint(*smooth_route[i-1])
-            p2 = GeoPoint(*smooth_route[i])
+            p1 = smooth_route[i-1]
+            p2 = smooth_route[i]
             distances.append(distances[-1] + p1.distance_to(p2))
         return distances
 
     def _collect_marker_indices(self,
-                                smooth_route: List[Tuple[float, float]],
+                                smooth_route: List[GeoPoint],
                                 total_length: float,
                                 distances: List[float],
                                 associated_tracks: List[Track]) -> Tuple[List[int], List[Tuple[int, SpotPhoto]]]:
@@ -138,7 +129,7 @@ class CheckpointGenerator:
 
     def _add_photo_markers(self,
                            marker_indices: Set[int],
-                           smooth_route: List[Tuple[float, float]],
+                           smooth_route: List[GeoPoint],
                            associated_tracks: List[Track]) -> List[Tuple[int, SpotPhoto]]:
         """
         Adds indices for points near local photos to the marker_indices set, and
@@ -185,7 +176,7 @@ class CheckpointGenerator:
                                   track: Track,
                                   track_start_time: datetime,
                                   track_duration: float,
-                                  smooth_route: List[Tuple[float, float]],
+                                  smooth_route: List[GeoPoint],
                                   current_photo_checkpoints: List[Tuple[int, SpotPhoto]]) -> Optional[Tuple[int, SpotPhoto]]:
         """
         Processes a single photo to determine if it should add a marker.
@@ -218,8 +209,8 @@ class CheckpointGenerator:
         # Check for proximity to existing photo checkpoints identified so far
         is_too_close_to_existing_photo = False
         for existing_idx, _ in current_photo_checkpoints: # Iterate through the passed list
-            existing_point = GeoPoint(*smooth_route[existing_idx])
-            new_point = GeoPoint(*smooth_route[closest_smooth_idx])
+            existing_point = smooth_route[existing_idx]
+            new_point = smooth_route[closest_smooth_idx]
             if new_point.distance_to(existing_point) < PHOTO_CHECKPOINT_DISTANCE_THRESHOLD:
                 is_too_close_to_existing_photo = True
                 break
@@ -255,7 +246,7 @@ class CheckpointGenerator:
         return closest_track_point if min_time_diff < 300 else None
 
     def _find_closest_smooth_point(self,
-                                 smooth_route: List[Tuple[float, float]],
+                                 smooth_route: List[GeoPoint],
                                  point: GeoPoint) -> int:
         """
         Finds the index of the smooth route point closest to the given geographic point.
@@ -267,7 +258,7 @@ class CheckpointGenerator:
         """
         return min(
             range(len(smooth_route)),
-            key=lambda i: GeoPoint(*smooth_route[i]).distance_to(point)
+            key=lambda i: smooth_route[i].distance_to(point)
         )
 
     def _add_uniform_markers(self,
@@ -294,22 +285,11 @@ class CheckpointGenerator:
                 marker_indices.add(closest_idx)
 
     def _create_checkpoints_from_markers(self,
-                                         smooth_route: List[Tuple[float, float]],
-                                         route_elevations: List[float],
+                                         smooth_route: List[GeoPoint],
                                          distances: List[float],
                                          marker_indices: List[int],
                                          photo_checkpoints_data: List[Tuple[int, SpotPhoto]]) -> List[Checkpoint]:
-        """
-        Creates Checkpoint objects from the collected marker indices and photo data.
-        Args:
-            smooth_route: The smoothed route points.
-            route_elevations: Elevations corresponding to smooth_route points.
-            distances: Cumulative distances for smooth_route points.
-            marker_indices: Sorted list of indices to create checkpoints for.
-            photo_checkpoints_data: List of (index, SpotPhoto) for photo checkpoints.
-        Returns:
-            A list of Checkpoint objects.
-        """
+
         checkpoints = []
         total_positions = len(marker_indices)
 
@@ -318,8 +298,8 @@ class CheckpointGenerator:
         idx_to_photo: Dict[int, SpotPhoto] = {idx: photo for idx, photo in photo_checkpoints_data}
 
         for i, idx in enumerate(marker_indices):
-            point = smooth_route[idx]
-            elevation = route_elevations[idx]
+            point     = smooth_route[idx]
+            elevation = smooth_route[idx].elevation
             photo_info = idx_to_photo.get(idx) # Get SpotPhoto object
             distance_from_start = distances[idx] if idx < len(distances) else 0
 
@@ -344,8 +324,8 @@ class CheckpointGenerator:
                 point_index=idx,
                 position=i + 1, # 1-based position
                 total_positions=total_positions,
-                lat=point[0],
-                lon=point[1],
+                lat=point.lat,
+                lon=point.lon,
                 elevation=elevation,
                 distance_from_start=distance_from_start,
                 name=name,

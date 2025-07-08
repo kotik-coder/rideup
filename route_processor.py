@@ -31,20 +31,19 @@ class RouteProcessor:
         """Main processing pipeline for a route."""
         print_step("RouteProcessor", f"Starting processing for route: {route.name}")
 
-        smooth_points, smooth_elevations = self._create_smooth_route(route)
+        smooth_points = self._create_smooth_route(route)
         print_step("RouteProcessor", f"Route '{route.name}': Generated {len(smooth_points)} smoothed points.")
 
         # Get tracks associated with this route
         associated_tracks = [t for t in self.all_tracks if t.route == route]
         
         checkpoints = self.checkpoint_generator.generate_checkpoints(
-            [(p.lat, p.lon) for p in smooth_points],
-            smooth_elevations,
+            smooth_points,
             associated_tracks
         )
         print_step("RouteProcessor", f"Route '{route.name}': Generated {len(checkpoints)} checkpoints.")
         
-        segments = self._calculate_segments(checkpoints, smooth_elevations)
+        segments = self._calculate_segments(checkpoints, [p.elevation for p in smooth_points])
         self._enrich_descriptions(checkpoints, segments)
 
         print_step("RouteProcessor", f"Route '{route.name}': Generated {len(segments)} segments.")
@@ -108,63 +107,67 @@ class RouteProcessor:
             ))
         return segments
 
-    def _create_smooth_route(self, route: Route) -> Tuple[List[GeoPoint], List[float]]:
+    def _create_smooth_route(self, route: Route) -> List[GeoPoint]:
         """
         Creates a smoothed version of the route's points and elevations using
         linear or Akima spline interpolation based on point density.
         """
-        MIN_POINTS_FOR_LINEAR = 50     # Use linear if ≥50 points
-        MAX_DISTANCE_FOR_LINEAR = 10.0 # Use linear if avg spacing <10m
+        MIN_POINTS_FOR_LINEAR = 200    # Use linear if ≥ 200 points
+        MAX_DISTANCE_FOR_LINEAR = 15.0 # Use linear if avg spacing <15m
         
         if len(route.points) < 4:
             print_step("Smoothing", f"Route '{route.name}': <4 points, returning raw points")
-            return route.points.copy(), route.elevations.copy()
+            return route.points.copy()
 
-        points = np.array([(p.lat, p.lon) for p in route.points])
-        elevations = np.array(route.elevations)
+        points     = route.points
 
         distances = np.zeros(len(points))
         for i in range(1, len(points)):
-            p1 = GeoPoint(points[i-1][0], points[i-1][1])
-            p2 = GeoPoint(points[i][0], points[i][1])
-            distances[i] = distances[i-1] + p1.distance_to(p2)
+            p1 = GeoPoint(points[i-1].lat, points[i-1].lon)
+            p2 = GeoPoint(points[i].lat, points[i].lon)
+            distances[i] = distances[i-1] + p1.distance_to(p2)        
         
-        avg_distance = distances[-1] / (len(points) - 1) if len(points) > 1 else 0
+        if distances[-1] == 0:
+            return route.points.copy()
         
-        use_linear = (len(points) >= MIN_POINTS_FOR_LINEAR and 
-                    avg_distance <= MAX_DISTANCE_FOR_LINEAR)
+        avg_distance = distances[-1] / (len(points) - 1)
+        
+        use_linear = (len(points) >= MIN_POINTS_FOR_LINEAR or 
+                     avg_distance <= MAX_DISTANCE_FOR_LINEAR)
         
         method = "linear" if use_linear else "Akima"
         print_step("Smoothing", 
                 f"Route '{route.name}': {len(points)} points, "
                 f"avg spacing {avg_distance:.1f}m → {method} interpolation")
 
-        if distances[-1] == 0:
-            return route.points.copy(), route.elevations.copy()
-
         t = distances / distances[-1]
         num_smooth_points = max(100, int(distances[-1] / 10))
         t_smooth = np.linspace(0, 1, num_smooth_points)
 
         try:
+            
+            lats = [p.lat for p in points]
+            lons = [p.lon for p in points]
+            
             if use_linear:
-                interp_lat = interp1d(t, points[:, 0], kind='linear')
-                interp_lon = interp1d(t, points[:, 1], kind='linear')
-                interp_elev = interp1d(t, elevations, kind='linear')
+                interp_lat = interp1d(t,  lats, kind='linear')
+                interp_lon = interp1d(t,  lons, kind='linear')
+                interp_elev = interp1d(t, route.elevations, kind='linear')
             else:
-                interp_lat = Akima1DInterpolator(t, points[:, 0])
-                interp_lon = Akima1DInterpolator(t, points[:, 1])
-                interp_elev = Akima1DInterpolator(t, elevations)
+                interp_lat = Akima1DInterpolator(t, lats)
+                interp_lon = Akima1DInterpolator(t, lons)
+                interp_elev = Akima1DInterpolator(t, route.elevations)
 
             smooth_points = [
-                GeoPoint(lat, lon) 
-                for lat, lon in zip(
+                GeoPoint(lat, lon, elev) 
+                for lat, lon, elev in zip(
                     interp_lat(t_smooth),
-                    interp_lon(t_smooth)
+                    interp_lon(t_smooth),
+                    interp_elev(t_smooth)
                 )
             ]
-            return smooth_points, interp_elev(t_smooth).tolist()
+            return smooth_points
 
         except Exception as e:
             print_step("Error", f"Smoothing failed for {route.name}: {str(e)}", level="ERROR")
-            return route.points.copy(), route.elevations.copy()
+            return route.points.copy()
