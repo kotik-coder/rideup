@@ -45,7 +45,6 @@ class BitsevskyMapApp:
         
         #set up layout for ui
         self.app.layout = setup_layout(spot=self.spot)
-        create_base_map(self.spot)
         
         # Setup callbacks after everything is initialized
         setup_callbacks(
