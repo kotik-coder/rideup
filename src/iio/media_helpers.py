@@ -5,18 +5,17 @@ import json
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List
 import atexit
-import re
 from datetime import datetime, timezone
+from routes.route import GeoPoint
 
 # Импортируем Pillow для обработки изображений и piexif для EXIF
 from PIL import Image
 import piexif
 
 # Get the package root directory
-package_root = Path(__file__).parent.parent
-
-# Access your resource folders
-photos_dir = package_root / "local_photos"
+package_root = Path(__file__).parent.parent.parent
+photos_dir_rel = "local_photos" 
+photos_dir_abs = package_root / photos_dir_rel
 CACHE_FILE = Path(package_root / "landscape_photo_cache.json")
 
 # Настройки
@@ -79,7 +78,7 @@ def _convert_to_degrees(value: tuple) -> float:
     s = float(value[2][0]) / float(value[2][1])
     return d + (m / 60.0) + (s / 3600.0)
 
-def get_exif_geolocation(image_path: Path) -> Optional[Tuple[float, float]]:
+def get_exif_geolocation(image_path: Path) -> Optional[GeoPoint]:
     """
     Извлекает географические координаты (широту, долготу) из EXIF данных фотографии.
     Возвращает (latitude, longitude) или None, если данные не найдены.
@@ -106,7 +105,7 @@ def get_exif_geolocation(image_path: Path) -> Optional[Tuple[float, float]]:
             if lon_ref != "E":
                 longitude = -longitude
             
-            return latitude, longitude
+            return GeoPoint(lat = latitude, lon = longitude)
     except Exception as e:
         pass
     return None
@@ -258,11 +257,9 @@ def get_photo_html(lat: float, lon: float, local_photo_path: Optional[str] = Non
     """Генерация HTML с защитой от ошибок"""
     photo_url = None
     source = ""
-
+    
     if local_photo_path:
-        filename = Path(local_photo_path).name
-        # *** CHANGE THIS LINE ***
-        photo_url = photos_dir / filename
+        photo_url = f"/static/local_photos/{local_photo_path}"
         source = "Локальное фото"
     else:
         photo_url, source = get_landscape_photo(lat, lon)
@@ -272,7 +269,7 @@ def get_photo_html(lat: float, lon: float, local_photo_path: Optional[str] = Non
         <div style="margin:10px 0;text-align:center;color:#666;font-size:0.9em">
             <p>Фото местности недоступно</p>
         </div>
-        """
+        """        
     
     return f"""
     <div style="margin:10px 0;text-align:center">

@@ -3,11 +3,11 @@ from dash import Input, Output, State, callback_context, no_update
 from ui.map_helpers import print_step
 from ui.map_visualization import update_map_for_selected_route
 from routes.route_processor import RouteProcessor
-from routes.spot import SpotLoader, Spot
+from routes.spot import Spot
 
 from ui.ui_components import create_checkpoint_card, create_route_info_card
 
-def setup_callbacks(app, spot: Spot, spot_loader: SpotLoader, route_processor: RouteProcessor):
+def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
     """
     Registers all Dash callbacks with the provided Dash app instance.
     Handles route selection from both the dropdown and map clicks.
@@ -68,8 +68,8 @@ def setup_callbacks(app, spot: Spot, spot_loader: SpotLoader, route_processor: R
         Output('checkpoint-info', 'children'),
         Output('selected-checkpoint-index', 'data'),
         Input('selected-route-index', 'data'),
-        #Input('map-graph', 'clickData'),
-        #State('map-graph', 'figure'),
+        Input('map-graph', 'clickData'),
+        State('map-graph', 'figure'),
         State('selected-checkpoint-index', 'data'),
         prevent_initial_call=True
     )

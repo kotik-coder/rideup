@@ -1,4 +1,5 @@
 import os
+import re
 import gpxpy
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
@@ -8,15 +9,22 @@ from ui.map_helpers import print_step
 from routes.track import Track, TrackPoint
 
 # Get the package root directory
-package_root = Path(__file__).parent.parent
+package_root = Path(__file__).parent.parent.parent
 GPX_DIR      = package_root / "local_routes"
 
 class LocalGPXLoader:
-    def __init__(self):
+    
+    _instance = None
+    
+    def __new__(cls, *args, **kwargs):
+        if not isinstance(cls._instance, cls):
+            cls._instance = object.__new__(cls, *args, **kwargs)
         print_step("GPX", "Инициализация загрузчика локальных маршрутов")
         GPX_DIR.mkdir(exist_ok=True)
+        return cls._instance    
 
-    def _extract_metadata(self, gpx) -> Dict:
+    @staticmethod
+    def _extract_metadata(gpx) -> Dict:
         """Извлекает метаданные из GPX файла"""
         metadata = {
             "name": "Безымянный маршрут",
@@ -40,8 +48,31 @@ class LocalGPXLoader:
             else:
                 metadata["time"] = gpx.time
         return metadata
+    
+    @staticmethod
+    def load_all_gpx():        
+        data = []
+        for gpx_file in GPX_DIR.glob("*.gpx"):                        
+            print_step("GPXLoader", f"Processing {gpx_file}...")        
+            data.extend( LocalGPXLoader.load_routes_and_tracks(gpx_file) )
+        return data
 
-    def load_routes_and_tracks(self, gpx_path: Path) -> List[Tuple[Route, List[Track]]]:
+    @staticmethod
+    def clean_string(str): 
+        # Define what to keep:
+        # - alphanumeric characters (a-z, A-Z, 0-9)
+        # - whitespace (to be trimmed later)
+        # - any additional characters specified in keep_chars
+        pattern = f'[^\w\s{re.escape("!")}]'
+        
+        # Remove special characters
+        cleaned = re.sub(pattern, '', str)
+
+        # Trim leading and trailing whitespace and replace multiple spaces with single space
+        return ' '.join(cleaned.split())
+
+    @staticmethod
+    def load_routes_and_tracks(gpx_path: Path) -> List[Tuple[Route, List[Track]]]:
         results: List[Tuple[Route, List[Track]]] = []
         with open(gpx_path, 'r') as gpx_file:
             gpx = gpxpy.parse(gpx_file)
@@ -51,7 +82,8 @@ class LocalGPXLoader:
             current_elevations = []
             current_descriptions = []
             current_tracks_for_route: List[Track] = []
-            total_distance = 0.0  # Initialize total distance
+            total_distance = 0.0  # Initialize total distance            
+            track_gpx.name = LocalGPXLoader.clean_string(track_gpx.name)
 
             for segment in track_gpx.segments:
                 # Collect data for the Route object
@@ -70,10 +102,10 @@ class LocalGPXLoader:
                     
                 # Create Track object from segment points
                 track_points_for_segment = []
-                start_time = self._ensure_utc(segment.points[0].time) if segment.points and segment.points[0].time else None
+                start_time = LocalGPXLoader.ensure_utc(segment.points[0].time) if segment.points and segment.points[0].time else None
                 
                 for pt in segment.points:
-                    timestamp = self._ensure_utc(pt.time)
+                    timestamp = LocalGPXLoader.ensure_utc(pt.time)
                     elapsed = (timestamp - start_time).total_seconds() if start_time and timestamp else 0
                     track_points_for_segment.append(TrackPoint(
                         point=GeoPoint(pt.latitude, pt.longitude, pt.elevation or 0),
@@ -97,11 +129,14 @@ class LocalGPXLoader:
                 for track in current_tracks_for_route:
                     track.route = route_obj
                 
-                results.append((route_obj, current_tracks_for_route))
+                results.append((route_obj, current_tracks_for_route))                                
+                
+                print_step("GPXLoader", f"Route {route_obj.name} loaded successfully.")
 
         return results
 
-    def _ensure_utc(self, dt: Optional[datetime]) -> Optional[datetime]:
+    @staticmethod
+    def ensure_utc(dt: Optional[datetime]) -> Optional[datetime]:
         if dt and dt.tzinfo is None:
             return dt.replace(tzinfo=timezone.utc)
         return dt

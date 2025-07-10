@@ -1,15 +1,12 @@
-import random
 import math
-import numpy as np
 import requests
 import time
 import json
 from pathlib import Path
-from shapely.geometry import Point, Polygon # Import Polygon as well for type hinting
-from typing import Tuple, List, Optional, Dict
+from typing import Tuple, List, Dict
 import sys
 
-from datetime import datetime
+from datetime import datetime 
 
 CACHE_FILE = Path("elevation_cache.json")
 REQUEST_DELAY = 1.0  # Задержка между запросами в секундах
@@ -80,108 +77,6 @@ def safe_get_elevation(lat: float, lon: float) -> float:
         print(f"Ошибка парсинга ответа или структуры данных для ({lat},{lon}): {e}", file=sys.stderr)
     return 0.0 # Return a default elevation in case of an error
 
-def get_boundary_point(polygon: Polygon, bounds: List[float]) -> Tuple[float, float]:
-    """
-    Генерирует случайную точку на границе полигона леса.
-    """
-    min_lon, min_lat, max_lon, max_lat = bounds
-    
-    # Try to find a point on the actual boundary
-    for _ in range(100): # Attempts to find a point on the boundary
-        # Randomly choose a side (top, bottom, left, right)
-        side = random.choice(['horizontal', 'vertical'])
-        if side == 'horizontal':
-            lat = random.uniform(min_lat, max_lat)
-            lon = random.choice([min_lon, max_lon])
-        else:
-            lon = random.uniform(min_lon, max_lon)
-            lat = random.choice([min_lat, max_lat])
-        
-        # Check if this point is close to the polygon's boundary
-        point_candidate = Point(float(lon), float(lat))
-        if polygon.boundary.distance(point_candidate) < 0.0001: # Check if it's very close to boundary
-            return (float(lat), float(lon))
-            
-    # Fallback: if no point on boundary is found, return a corner or center of bounds
-    return (float(min_lat), float(min_lon)) # Default to bottom-left corner
-
-def generate_nearby_point(reference_point: Tuple[float, float], polygon: Polygon, max_distance: float, bounds: List[float]) -> Optional[Tuple[float, float]]:
-    """Генерация точки в пределах расстояния от reference_point внутри полигона."""
-    ref_lat, ref_lon = float(reference_point[0]), float(reference_point[1])
-    
-    # Convert meters to degrees approximately (at equator)
-    # 1 degree of latitude approx 111,320 meters
-    # 1 degree of longitude approx (111,320 * cos(latitude)) meters
-    
-    for _ in range(100): # Max attempts to find a valid point
-        angle = random.uniform(0, 2 * math.pi)
-        distance = random.uniform(100, float(max_distance)) # Distance in meters
-        
-        # Calculate delta_lat and delta_lon
-        delta_lat = distance * math.cos(angle) / 111320
-        delta_lon = distance * math.sin(angle) / (111320 * math.cos(math.radians(ref_lat)))
-        
-        new_lat = ref_lat + delta_lat
-        new_lon = ref_lon + delta_lon
-        
-        # Check if the new point is within the bounding box and inside the polygon
-        if (float(bounds[1]) <= new_lat <= float(bounds[3]) and 
-            float(bounds[0]) <= new_lon <= float(bounds[2]) and
-            polygon.contains(Point(float(new_lon), float(new_lat)))):
-            return (float(new_lat), float(new_lon))
-            
-    return None # Return None if no valid point is found after attempts
-
-def get_boundary_near_point(polygon: Polygon, bounds: List[float], reference_point: Tuple[float, float], max_distance_from_ref: float) -> Optional[Tuple[float, float]]:
-    """
-    Генерирует точку на границе полигона, которая находится в пределах
-    заданного расстояния от reference_point.
-    """
-    ref_lat, ref_lon = float(reference_point[0]), float(reference_point[1])
-    min_lon, min_lat, max_lon, max_lat = bounds
-
-    # Approximate degrees per meter at the reference latitude
-    deg_per_meter_lat = 1 / 111320
-    deg_per_meter_lon = 1 / (111320 * math.cos(math.radians(ref_lat)))
-
-    search_radius_deg_lat = max_distance_from_ref * deg_per_meter_lat
-    search_radius_deg_lon = max_distance_from_ref * deg_per_meter_lon
-
-    # Define a smaller bounding box around the reference point within which to search for boundary points
-    search_min_lat = max(min_lat, ref_lat - search_radius_deg_lat)
-    search_max_lat = min(max_lat, ref_lat + search_radius_deg_lat)
-    search_min_lon = max(min_lon, ref_lon - search_radius_deg_lon)
-    search_max_lon = min(max_lon, ref_lon + search_radius_deg_lon)
-
-    # Number of attempts to find a suitable point
-    for _ in range(200): # Increased attempts for better chance
-        # Randomly pick a point on the perimeter of the *search* bounding box
-        side = random.choice(['top', 'bottom', 'left', 'right'])
-        
-        if side == 'top':
-            lat_candidate = search_max_lat
-            lon_candidate = random.uniform(search_min_lon, search_max_lon)
-        elif side == 'bottom':
-            lat_candidate = search_min_lat
-            lon_candidate = random.uniform(search_min_lon, search_max_lon)
-        elif side == 'left':
-            lon_candidate = search_min_lon
-            lat_candidate = random.uniform(search_min_lat, search_max_lat)
-        else: # 'right'
-            lon_candidate = search_max_lon
-            lat_candidate = random.uniform(search_min_lat, search_max_lat)
-
-        current_point = Point(float(lon_candidate), float(lat_candidate))
-        
-        # Check if this point is near the actual forest boundary AND within the polygon
-        # The 0.0002 threshold is a small tolerance for floating point comparisons / proximity to boundary
-        if polygon.boundary.distance(current_point) < 0.0002 and polygon.contains(current_point):
-            return (float(lat_candidate), float(lon_candidate))
-            
-    # If no point is found near the reference within max_distance, fallback to a general boundary point
-    # This ensures a finish point is always found, even if not ideal
-    return get_boundary_point(polygon, bounds)
-
 def point_to_segment_projection_and_distance(
     point_lat: float, point_lon: float,
     seg_start_lat: float, seg_start_lon: float,
@@ -241,3 +136,23 @@ def point_to_segment_projection_and_distance(
     projected_lat = projected_y / lat_to_m
 
     return distance_in_meters, projected_lat, projected_lon, t
+
+def expanded_bounds(bounds : List[float], distance_km) -> List[float]: 
+    lon_min, lat_min, lon_max, lat_max = bounds
+    
+    km_per_deg_lat = 111.0
+        
+    # For longitude, it depends on latitude
+    avg_lat = (lat_min + lat_max) / 2
+    km_per_deg_lon = 111.0 * math.cos(math.radians(avg_lat))
+    
+    # Calculate degree offsets
+    lat_offset = distance_km / km_per_deg_lat
+    lon_offset = distance_km / km_per_deg_lon
+    
+    return [
+        lon_min - lon_offset,
+        lat_min - lat_offset,
+        lon_max + lon_offset,
+        lat_max + lat_offset
+    ]

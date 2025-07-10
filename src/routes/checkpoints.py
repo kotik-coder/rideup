@@ -39,9 +39,12 @@ class Checkpoint:
 
     def _generate_photo_html(self) -> str:
         """Generates the HTML for the photo associated with this checkpoint, if any."""
-        if self.is_photo and self.photo_path:
-            return get_photo_html(self.lat, self.lon, local_photo_path=self.photo_path)
-        return get_photo_html(self.lat, self.lon) # Return default HTML if not a photo checkpoint
+        result = ""        
+        if self.is_photo and self.photo_path:            
+            result = get_photo_html(self.lat, self.lon, local_photo_path=self.photo_path)
+        else:
+            result = get_photo_html(self.lat, self.lon) # Return default HTML if not a photo checkpoint
+        return result
 
     def to_dict(self) -> Dict[str, any]:
         """Converts the Checkpoint object to a dictionary."""
@@ -304,7 +307,7 @@ class CheckpointGenerator:
             distance_from_start = distances[idx] if idx < len(distances) else 0
 
             is_photo_checkpoint = photo_info is not None
-            photo_path = photo_info.path if is_photo_checkpoint else None # Access attribute directly
+            photo_path = photo_info.fname if is_photo_checkpoint else None # Access attribute directly
 
             # Determine checkpoint name and description
             if i == 0:
@@ -317,7 +320,7 @@ class CheckpointGenerator:
                 name = "Фототочка"
                 description = ""
             else:
-                name = f"Точка {i+1}"
+                name = f"Точка  {i+1}"
                 description = ""
 
             checkpoint = Checkpoint(

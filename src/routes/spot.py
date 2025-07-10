@@ -20,22 +20,47 @@ class Spot:
     geostring: str
     bounds: List[float]
     geometry : List[Tuple[float,float]]
-    local_photos_folder: str
+    
     local_photos: List[SpotPhoto]
+    
     routes: List[Route]
     tracks: List[Track]  # Tracks now contain their route reference
     polygon: any
 
-    def __init__(self, geostring: str, local_photos_folder: str = "local_photos"):
+    def __init__(self, geostring: str):
         self.name = geostring
         self.geostring = geostring
-        self.local_photos_folder = local_photos_folder
+        self._photos_loaded = False # Internal flag to prevent redundant photo loading
         self.local_photos = []
         self.routes = []
         self.tracks = []
         self.geometry = []
         self._get_bounds(geostring)
+        self.load_valid_routes_and_tracks()
+        self.local_photos = SpotPhoto.load_local_photos(self.bounds)
         print_step("Spot", f"Spot '{self.name}' initialized with bounds: {self.bounds}")
+            
+    def load_valid_routes_and_tracks(self):        
+        print_step("SpotLoader", "Loading routes and tracks...")
+        
+        # Collect all (Route, List[Track]) pairs from all GPX files
+        loaded_route_track_pairs = LocalGPXLoader.load_all_gpx()
+        
+        self.routes = [] # Reset to store only valid Route objects
+        self.tracks = [] # Reset to be a flattened list of all valid Track objects
+
+        for route, associated_tracks in loaded_route_track_pairs:
+            if route.is_valid_route(self.polygon):
+                self.routes.append(route)
+                # Set the route reference for each track
+                for track in associated_tracks:
+                    track.route = route
+                self.tracks.extend(associated_tracks)
+
+        print_step("SpotLoader", f"Found {len(self.routes)} valid routes for '{self.name}'")
+        print_step("SpotLoader", f"Found {len(self.tracks)} tracks for '{self.name}'")        
+
+        return self.routes
 
     def _get_bounds(self, geostring: str):
         """
@@ -62,77 +87,3 @@ class Spot:
             
         except Exception as e:
             print_step("Error", f"Failed to get bounds for '{geostring}': {e}", level="ERROR")
-
-class SpotLoader:
-    """
-    Responsible for loading and populating a Spot object with valid routes,
-    tracks, and associated local photos.
-    """
-    def __init__(self, spot: Spot):
-        self.spot = spot
-        self._photos_loaded = False # Internal flag to prevent redundant photo loading
-
-    def _load_local_photos(self) -> List[SpotPhoto]:
-        """
-        Loads local photos with geolocation and timestamp data from the specified folder
-        associated with the spot.
-        """
-        if self._photos_loaded:
-            return self.spot.local_photos
-
-        # Access your resource folders
-        package_root = Path(__file__).parent.parent
-        print(package_root)
-        folder_path_str = package_root / "local_photos"
-        folder_path = Path(folder_path_str)
-
-        print_step("SpotLoader", f"Loading local photos from folder: {folder_path_str}...")
-        if not folder_path.is_dir():
-            print_step("SpotLoader", f"Folder '{folder_path_str}' not found or is not a directory.", level="WARNING")
-            return []
-        
-        photos = []
-        for ext in ['*.jpg', '*.jpeg', '*.png']:
-            for image_path in folder_path.glob(ext):
-                photo = SpotPhoto.from_image_path(image_path)
-                if photo:
-                    photos.append(photo)
-        
-        print_step("SpotLoader", f"Found {len(photos)} photos with timestamps.")
-        self.spot.local_photos = photos
-        self._photos_loaded = True
-        return self.spot.local_photos
-
-    def load_valid_routes_and_tracks(self):
-        """
-        Loads routes and tracks from GPX files, filters them based on the spot's bounds,
-        and populates the Spot object.
-        """
-        print_step("SpotLoader", "Loading routes and tracks...")
-        loader = LocalGPXLoader()
-        
-        # Collect all (Route, List[Track]) pairs from all GPX files
-        loaded_route_track_pairs: List[Tuple[Route, List[Track]]] = []
-        
-        for gpx_file in iio.gpx_loader.GPX_DIR.glob("*.gpx"):                        
-            loaded_route_track_pairs.extend(loader.load_routes_and_tracks(gpx_file))
-
-        self.spot.routes = [] # Reset to store only valid Route objects
-        self.spot.tracks = [] # Reset to be a flattened list of all valid Track objects
-
-        for route, associated_tracks in loaded_route_track_pairs:
-            if route.is_valid_route(self.spot.polygon):
-                self.spot.routes.append(route)
-                # Set the route reference for each track
-                for track in associated_tracks:
-                    track.route = route
-                self.spot.tracks.extend(associated_tracks)
-
-        print_step("SpotLoader", f"Found {len(self.spot.routes)} valid routes for '{self.spot.name}'")
-        print_step("SpotLoader", f"Found {len(self.spot.tracks)} tracks for '{self.spot.name}'")
-        
-        # Ensure local photos are loaded after routes and tracks, as they might be used
-        # for checkpoint generation by RouteProcessor.
-        self._load_local_photos()
-
-        return self.spot.routes
