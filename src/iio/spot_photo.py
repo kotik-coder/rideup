@@ -5,12 +5,11 @@ from datetime import datetime
 from typing import List, Optional
 from dataclasses import dataclass
 
-from routes.route import GeoPoint
-from ui.map_helpers import expanded_bounds, print_step
+from src.routes.route import GeoPoint
+from src.ui.map_helpers import expanded_bounds, print_step
 
-from iio.media_helpers import photos_dir_abs
-from iio.media_helpers import photos_dir_rel
-from iio.media_helpers import get_exif_geolocation, get_photo_timestamp
+from src.iio.media_helpers import photos_dir_abs
+from src.iio.media_helpers import get_exif_geolocation, get_photo_timestamp
 
 @dataclass
 class SpotPhoto:

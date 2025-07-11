@@ -1,11 +1,12 @@
 # callbacks.py
 from dash import Input, Output, State, callback_context, no_update
-from ui.map_helpers import print_step
-from ui.map_visualization import update_map_for_selected_route
-from routes.route_processor import RouteProcessor
-from routes.spot import Spot
 
-from ui.ui_components import create_checkpoint_card, create_route_info_card
+from src.ui.map_helpers import print_step
+from src.ui.map_visualization import update_map_for_selected_route
+from src.routes.route_processor import RouteProcessor
+from src.routes.spot import Spot
+
+from src.ui.ui_components import create_checkpoint_card, create_route_info_card
 
 def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
     """

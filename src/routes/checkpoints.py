@@ -1,9 +1,10 @@
 from typing import List, Dict, Set, Optional, Tuple
 from datetime import datetime, timezone
-from routes.route import GeoPoint
-from iio.spot_photo import SpotPhoto
-from routes.track import Track, TrackPoint
-from iio.media_helpers import get_photo_html # Assuming this function exists and is correctly imported
+
+from src.routes.route import GeoPoint
+from src.iio.spot_photo import SpotPhoto
+from src.routes.track import Track, TrackPoint
+from src.iio.media_helpers import get_photo_html # Assuming this function exists and is correctly imported
 
 PHOTO_CHECKPOINT_DISTANCE_THRESHOLD = 50.0  # meters
 

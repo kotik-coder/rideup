@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple, List
 import atexit
 from datetime import datetime, timezone
-from routes.route import GeoPoint
+
+from src.routes.route import GeoPoint
 
 # Импортируем Pillow для обработки изображений и piexif для EXIF
 from PIL import Image
@@ -14,8 +15,9 @@ import piexif
 
 # Get the package root directory
 package_root = Path(__file__).parent.parent.parent
-photos_dir_rel = "local_photos" 
-photos_dir_abs = package_root / photos_dir_rel
+photos_dir = "local_photos"
+photos_dir_rel = f"assets/{photos_dir}/"
+photos_dir_abs = package_root / "assets" / photos_dir
 CACHE_FILE = Path(package_root / "landscape_photo_cache.json")
 
 # Настройки
@@ -259,7 +261,7 @@ def get_photo_html(lat: float, lon: float, local_photo_path: Optional[str] = Non
     source = ""
     
     if local_photo_path:
-        photo_url = f"/static/local_photos/{local_photo_path}"
+        photo_url = f"{photos_dir_rel}{local_photo_path}"
         source = "Локальное фото"
     else:
         photo_url, source = get_landscape_photo(lat, lon)

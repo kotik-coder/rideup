@@ -7,12 +7,12 @@ from dataclasses import dataclass
 from shapely import MultiPolygon, Polygon
 
 # Assuming these are available in your project structure
-from ui.map_helpers import print_step
-import iio.gpx_loader
-from iio.gpx_loader import LocalGPXLoader # Assuming LocalGPXLoader is within gpx_loader
-from routes.route import Route
-from iio.spot_photo import SpotPhoto
-from routes.track import Track
+from src.ui.map_helpers import print_step
+import src.iio.gpx_loader
+from src.iio.gpx_loader import LocalGPXLoader # Assuming LocalGPXLoader is within gpx_loader
+from src.routes.route import Route
+from src.iio.spot_photo import SpotPhoto
+from src.routes.track import Track
 
 @dataclass
 class Spot:

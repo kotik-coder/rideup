@@ -3,10 +3,10 @@ import numpy as np
 import plotly.graph_objects as go
 from typing import List, Optional, Tuple
 
-from ui.map_helpers import print_step
-from routes.route import Route
-from routes.route_processor import ProcessedRoute
-from routes.spot import Spot
+from src.ui.map_helpers import print_step
+from src.routes.route import Route
+from src.routes.route_processor import ProcessedRoute
+from src.routes.spot import Spot
 
 intermediate_points_label = "Intermediate"
 checkpoints_label = "Checkpoints"

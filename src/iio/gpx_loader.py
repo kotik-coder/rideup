@@ -4,13 +4,14 @@ import gpxpy
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime, timezone
-from routes.route import Route, GeoPoint
-from ui.map_helpers import print_step
-from routes.track import Track, TrackPoint
+
+from src.routes.route import Route, GeoPoint
+from src.ui.map_helpers import print_step
+from src.routes.track import Track, TrackPoint
 
 # Get the package root directory
 package_root = Path(__file__).parent.parent.parent
-GPX_DIR      = package_root / "local_routes"
+GPX_DIR      = package_root / "assets" / "local_routes"
 
 class LocalGPXLoader:
     

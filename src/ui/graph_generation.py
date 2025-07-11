@@ -1,7 +1,8 @@
 import plotly.graph_objects as go
 import numpy as np
-from routes.statistics_collector import ProfilePoint # For logging, if needed
 from typing import List
+
+from src.routes.statistics_collector import ProfilePoint # For logging, if needed
 
 def get_fill_polygons(distances, values, threshold_value):
     """

@@ -1,8 +1,9 @@
 from typing import List, Dict
 from dataclasses import dataclass
-from ui.map_helpers import print_step
-from routes.route import Route
-from routes.track import Track
+
+from src.ui.map_helpers import print_step
+from src.routes.route import Route
+from src.routes.track import Track
 
 @dataclass
 class ProfilePoint:

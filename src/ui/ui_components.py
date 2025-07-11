@@ -2,8 +2,8 @@ import dash_bootstrap_components as dbc
 from dash import html
 import numpy as np
 
-from routes.checkpoints import Checkpoint
-from routes.route_processor import ProcessedRoute
+from src.routes.checkpoints import Checkpoint
+from src.routes.route_processor import ProcessedRoute
 
 def create_route_info_card(processed_route : ProcessedRoute):
     """

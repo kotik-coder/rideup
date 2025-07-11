@@ -3,12 +3,13 @@ import numpy as np
 from scipy.interpolate import Akima1DInterpolator, interp1d
 from typing import List
 from dataclasses import dataclass
-from ui.map_helpers import print_step
-from routes.route import GeoPoint, Route
-from routes.statistics_collector import StatisticsCollector, get_landscape_description, Segment
-from routes.checkpoints import Checkpoint, CheckpointGenerator
-from routes.track import Track
-from iio.spot_photo import SpotPhoto
+
+from src.ui.map_helpers import print_step
+from src.routes.route import GeoPoint, Route
+from src.routes.statistics_collector import StatisticsCollector, get_landscape_description, Segment
+from src.routes.checkpoints import Checkpoint, CheckpointGenerator
+from src.routes.track import Track
+from src.iio.spot_photo import SpotPhoto
 
 PHOTO_CHECKPOINT_DISTANCE_THRESHOLD = 50.0  # meters
 

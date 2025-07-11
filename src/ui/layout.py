@@ -1,8 +1,8 @@
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 
-from ui.map_visualization import create_base_map
-from routes.spot import Spot
+from src.ui.map_visualization import create_base_map
+from src.routes.spot import Spot
 
 def setup_layout(spot: Spot):
     """
