@@ -1,12 +1,13 @@
 import os
 import osmnx as ox
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 from dataclasses import dataclass
 
 from shapely import MultiPolygon, Polygon
 
 # Assuming these are available in your project structure
+from src.routes.route_processor import ProcessedRoute, RouteProcessor
 from src.ui.map_helpers import print_step
 import src.iio.gpx_loader
 from src.iio.gpx_loader import LocalGPXLoader # Assuming LocalGPXLoader is within gpx_loader
@@ -24,6 +25,7 @@ class Spot:
     local_photos: List[SpotPhoto]
     
     routes: List[Route]
+    processed_routes : Dict[int, ProcessedRoute]
     tracks: List[Track]  # Tracks now contain their route reference
     polygon: any
 
@@ -35,11 +37,23 @@ class Spot:
         self.routes = []
         self.tracks = []
         self.geometry = []
+        self.processed_routes = {}
         self._get_bounds(geostring)
         self.load_valid_routes_and_tracks()
         self.local_photos = SpotPhoto.load_local_photos(self.bounds)
         print_step("Spot", f"Spot '{self.name}' initialized with bounds: {self.bounds}")
+        
+    def get_processed_route(self, rp : RouteProcessor, route : Route, selected_index : int) -> ProcessedRoute:
+        route_dict = self.processed_routes
+        
+        if selected_index in route_dict:     
+            processed_route = self.processed_routes[selected_index]
+        else:                
+            route_dict[selected_index] = rp.process_route(route)
+            processed_route = route_dict[selected_index]
             
+        return processed_route
+        
     def load_valid_routes_and_tracks(self):        
         print_step("SpotLoader", "Loading routes and tracks...")
         

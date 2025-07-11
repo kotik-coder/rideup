@@ -15,11 +15,10 @@ PHOTO_CHECKPOINT_DISTANCE_THRESHOLD = 50.0  # meters
 
 @dataclass
 class ProcessedRoute:
-    """Contains the original route and processed data"""
-    route: Route
     smooth_points: List[GeoPoint]  # Interpolated points
     segments: List[Segment]
-    checkpoints: List[Checkpoint]    
+    checkpoints: List[Checkpoint]
+    bounds: List[float]
 
 class RouteProcessor:
     def __init__(self, local_photos: List[SpotPhoto], all_tracks: List[Track]):
@@ -29,7 +28,11 @@ class RouteProcessor:
 
     def process_route(self, route: Route) -> ProcessedRoute:
         """Main processing pipeline for a route."""
-        print_step("RouteProcessor", f"Starting processing for route: {route.name}")
+    
+        if not route:
+            return        
+        
+        print_step("RouteProcessor", f"Starting processing for route: {route.name}")        
 
         smooth_points = self._create_smooth_route(route)
         print_step("RouteProcessor", f"Route '{route.name}': Generated {len(smooth_points)} smoothed points.")
@@ -45,14 +48,22 @@ class RouteProcessor:
         
         segments = self._calculate_segments(checkpoints, [p.elevation for p in smooth_points])
         self._enrich_descriptions(checkpoints, segments)
+        
+        lons = [p.lon for p in route.points]
+        lats = [p.lat for p in route.points]
+        
+        lon_min = min(lons)
+        lat_min = min(lats)
+        lon_max = max(lons)
+        lat_max = max(lats)                
 
         print_step("RouteProcessor", f"Route '{route.name}': Generated {len(segments)} segments.")
 
         return ProcessedRoute(
-            route=route,
             smooth_points=smooth_points,
             segments=segments,
-            checkpoints=checkpoints
+            checkpoints=checkpoints,
+            bounds=[lon_min, lat_min, lon_max, lat_max]
         )
 
     def _enrich_descriptions(self, checkpoints: List[Checkpoint], segments: List[Segment]):
