@@ -94,11 +94,14 @@ def add_full_route_to_figure(fig: go.Figure,
 def add_checkpoints(fig: go.Figure, r: ProcessedRoute):
     checkpoints = r.checkpoints
     
+    # Ensure checkpoints are sorted by their point_index
+    checkpoints = sorted(checkpoints, key=lambda cp: cp.point_index)
+    
     checkpoint_lons = [r.smooth_points[cp.point_index].lon for cp in checkpoints]
     checkpoint_lats = [r.smooth_points[cp.point_index].lat for cp in checkpoints]    
     checkpoint_customdata = [
-        [i, cp.name, cp.description, cp.elevation, cp.distance_from_start]
-        for i, cp in enumerate(checkpoints)
+        [idx, cp.name, cp.description, cp.elevation, cp.distance_from_start]
+        for idx, cp in enumerate(checkpoints)  # Use enumerate to ensure sequential indexing
     ]
 
     fig.add_trace(go.Scattermap(
@@ -106,7 +109,7 @@ def add_checkpoints(fig: go.Figure, r: ProcessedRoute):
         lon=checkpoint_lons,
         lat=checkpoint_lats,
         marker=dict(
-            size=12,  # Single size for all checkpoints
+            size=12,
             color='green',
             opacity=0.5,
             symbol='circle',
@@ -122,13 +125,13 @@ def add_checkpoints(fig: go.Figure, r: ProcessedRoute):
         ),
         selected=dict(
             marker=dict(
-                size=15,  # Larger size when selected
+                size=15,
                 color='darkgreen',
                 opacity=1.0
             )
         ),
         unselected=dict(
-            marker=dict(opacity=0.5)  # Remain fully visible
+            marker=dict(opacity=0.5)
         ),
         showlegend=True,
         name=checkpoints_label

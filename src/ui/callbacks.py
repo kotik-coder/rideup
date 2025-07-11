@@ -1,5 +1,6 @@
 # callbacks.py
 from dash import Input, Output, State, callback_context, no_update
+import dash
 
 from src.ui.map_helpers import print_step
 from src.ui.map_visualization import *
@@ -125,7 +126,7 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         if not isinstance(point.get('customdata'), list):
             return no_update, no_update
             
-        checkpoint_index = point['customdata'][0] + 1
+        checkpoint_index = point['customdata'][0]
         selected_route = spot.routes[selected_route_index]
         processed_route = route_processor.process_route(selected_route)
         
@@ -142,52 +143,6 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
                 break
                 
         return create_checkpoint_card(checkpoint), fig
-
-    @app.callback(
-        Output('map-graph', 'figure', allow_duplicate=True),
-        Input('prev-checkpoint-button', 'n_clicks'),
-        Input('next-checkpoint-button', 'n_clicks'),
-        State('selected-route-index', 'data'),
-        State('map-graph', 'figure'),
-        prevent_initial_call=True
-    )
-    def navigate_checkpoints(prev_clicks, next_clicks, selected_route_index, current_figure):
-        """
-        Handles navigation between checkpoints and updates map selection.
-        """
-        if selected_route_index is None:
-            return no_update
-            
-        triggered_id = callback_context.triggered[0]['prop_id'].split('.')[0]
-        selected_route = spot.routes[selected_route_index]
-        processed_route = route_processor.process_route(selected_route)
-        checkpoints = processed_route.checkpoints
-        
-        if not checkpoints:
-            return no_update
-            
-        # Find current selection
-        current_selection = None
-        for trace in current_figure['data']:
-            if trace.get('name') == checkpoints_label:
-                current_selection = trace.get('selectedpoints', [None])[0]
-                break
-                
-        # Calculate new index
-        if triggered_id == 'prev-checkpoint-button':
-            new_index = current_selection - 1 if current_selection is not None else len(checkpoints) - 1
-        else:
-            new_index = current_selection + 1 if current_selection is not None else 0
-        new_index %= len(checkpoints)
-        
-        # Update figure with new selection
-        fig = go.Figure(current_figure)
-        for trace in fig.data:
-            if trace.name == checkpoints_label:
-                trace.selectedpoints = [new_index]
-                break
-                
-        return fig
 
     # Add this new callback to update the checkpoint info when navigating
     @app.callback(
