@@ -58,7 +58,7 @@ def create_checkpoint_card(checkpoint, route : ProcessedRoute):
         ], className="g-0"),
         dbc.Row([
             dbc.Col(dbc.Button("← Предыдущий", id="prev-checkpoint-button", className="me-2", color="secondary", size="sm"), width={"size": 6, "offset": 0}),
-            dbc.Col(dbc.Button("Следующий →", id="next-checkpoint-button", className="ms-2", color="secondary", size="sm"), width={"size": 6, "offset": 0})
+            dbc.Col(dbc.Button("Следующий →",  id="next-checkpoint-button", className="ms-2", color="secondary", size="sm"), width={"size": 6, "offset": 0})
         ], className="mt-2 text-center")
     ])
     

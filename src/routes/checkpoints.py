@@ -86,20 +86,18 @@ class CheckpointGenerator:
                              smooth_points: List[GeoPoint],
                              associated_tracks: List[Track]) -> List[Checkpoint]:
         
-        all_marker_indices = set()
         #ensure both endpoints are always present
-        all_marker_indices.add(0) 
-        all_marker_indices.add(len(smooth_points) - 1)
+        marker_indices = [0, len(smooth_points) - 1]        
 
         #priority for user-uploaded photo checkpoints
         photo_checkpoints_data = self._add_photo_markers(smooth_points, associated_tracks)                
         photo_markers = list(photo_checkpoints_data.keys())
-        all_marker_indices.update(photo_markers)
         
-        marker_list = sorted(list(all_marker_indices))
+        marker_indices.sort()
+        marker_indices.extend(photo_markers)    
         
         #fill gaps with uniform markers
-        self._add_uniform_markers(marker_list, smooth_points)    
+        self._add_uniform_markers(marker_indices, smooth_points)    
         
         #combine both        
         return self._create_checkpoints_from_markers(

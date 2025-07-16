@@ -36,7 +36,7 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         # Only update the value if it's different from current
         if selected_route_index != current_dropdown_value:
             return options, selected_route_index            
-        
+          
         # Otherwise, just return the options (no value change)
         return options, no_update
 
@@ -46,11 +46,14 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         Output('map-graph', 'figure'),        
         Input('route-selector', 'value'),
         Input('map-graph', 'clickData'),
-        State('selected-route-index', 'data'),  # Add current selected index as state
+        State('selected-route-index', 'data'),
         State('map-graph', 'figure'),
         prevent_initial_call=True
     )
-    def handle_route_selection(dropdown_value, map_click_data, current_selected_index, current_map_figure):
+    def handle_route_selection(dropdown_value, 
+                               map_click_data, 
+                               current_selected_index, 
+                               current_map_figure):
         """
         Listens to user interactions from the dropdown and the map to update
         the central selected-route-index store.
@@ -79,11 +82,13 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
             route_info_ui, updated_map_figure = process_route_and_update_ui(result, current_map_figure)
             return result, route_info_ui, updated_map_figure
         
-        return result, no_update, no_update
+        print("Selection of route...")
+        return no_update, no_update, no_update
 
     #Not a callback
 
-    def process_route_and_update_ui(selected_route_index, current_map_figure):
+    def process_route_and_update_ui(selected_route_index, 
+                                    current_map_figure):
         print_step("Callbacks", f"Processing selected route index: {selected_route_index}")
         selected_route = spot.routes[selected_route_index]        
         
@@ -112,7 +117,9 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         State('map-graph', 'figure'),
         prevent_initial_call=True
     )
-    def handle_checkpoint_clicks(selected_data, selected_route_index, current_figure):
+    def handle_checkpoint_clicks(selected_data, 
+                                 selected_route_index, 
+                                 current_figure):
         """
         Handles checkpoint selection from map clicks and updates the figure.
         """
@@ -127,8 +134,8 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         if not isinstance(point.get('customdata'), list):
             return no_update, no_update
             
-        checkpoint_index = point['customdata'][0]
-        print(f"Selection (from map data) = {checkpoint_index}")
+        checkpoint_index = point['customdata'][0] + 1
+
         selected_route  = spot.routes[selected_route_index]
         processed_route = spot.get_processed_route(route_processor, 
                                                 selected_route, 
@@ -140,13 +147,7 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         checkpoint = processed_route.checkpoints[checkpoint_index]
         
         # Update the figure to highlight selected checkpoint
-        fig = go.Figure(current_figure)
-        for trace in fig.data:
-            if trace.name == checkpoints_label:
-                trace.selectedpoints = [checkpoint_index]
-                break
-                
-        return create_checkpoint_card(checkpoint, processed_route), fig
+        return create_checkpoint_card(checkpoint, processed_route), current_figure
     
     @app.callback(
         Output('checkpoint-info', 'children', allow_duplicate=True),
@@ -160,9 +161,10 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
     def handle_checkpoint_navigation(prev_clicks, next_clicks, selected_route_index, current_map_figure):
         """
         Handles navigation between checkpoints using 'Previous' and 'Next' buttons.
-        """
+        """        
+        
         if selected_route_index is None:
-            return no_update, no_update
+            return no_update, no_update                
 
         # Determine which button was clicked
         triggered_id = callback_context.triggered[0]['prop_id'].split('.')[0]

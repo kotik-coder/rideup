@@ -8,9 +8,9 @@ from src.routes.track import Track
 @dataclass
 class ProfilePoint:
     """Represents a point in elevation or velocity profile"""
-    distance: float  # in meters
-    elevation: float = None  # for elevation profile
-    velocity: float = None   # for velocity profile (in m/s)
+    distance:  float        # in meters
+    elevation: float = 0.0  # for elevation profile
+    velocity:  float = 0.0  # for velocity profile (in m/s)
 
 @dataclass
 class Segment:
@@ -25,15 +25,12 @@ class Segment:
     end_checkpoint_index: int
 
 class StatisticsCollector:
-    """Collects and generates various statistical profiles and analyses for routes and tracks."""
+
     def __init__(self):
         print_step("StatisticsCollector", "StatisticsCollector initialized.")
         
     def generate_route_profiles(self, route: Route, associated_tracks: List[Track]) -> Dict[str, List[ProfilePoint]]:
-        """
-        Generates both elevation and velocity profiles for a route.
-        Returns dictionary containing both profiles as lists of ProfilePoint objects.
-        """
+        
         profiles = {
             'elevation_profile': self.create_elevation_profile(route),
             'velocity_profile': self.create_velocity_profile_from_track(associated_tracks) if associated_tracks else []
@@ -41,17 +38,7 @@ class StatisticsCollector:
         return profiles
 
     def create_elevation_profile(self, route: Route) -> List[ProfilePoint]:
-        """
-        Creates an elevation profile from a route.
-        The profile consists of ProfilePoint objects with distance (cumulative) and elevation.
-        Also calculates and sets the route's total_distance.
-
-        Args:
-            route (Route): The route to process
-
-        Returns:
-            List[ProfilePoint]: A list of profile points with distance and elevation
-        """
+        
         profile = []
         route.total_distance = 0.0  # Initialize total distance
         
@@ -72,16 +59,7 @@ class StatisticsCollector:
         return profile
 
     def create_velocity_profile_from_track(self, associated_tracks: List[Track]) -> List[ProfilePoint]:
-        """
-        Creates a velocity profile from the route's primary track.
-        Uses the first associated track if available.
-
-        Args:
-            associated_tracks (List[Track]): The list of tracks associated with the route.
-
-        Returns:
-            List[ProfilePoint]: A list of profile points with distance and velocity
-        """
+        
         if not associated_tracks:
             print_step("StatisticsCollector", "No tracks available for velocity profile.", level="WARNING")
             return []

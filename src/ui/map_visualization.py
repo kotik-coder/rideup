@@ -58,7 +58,7 @@ def add_full_route_to_figure(fig: go.Figure,
     non_checkpoint_lons = []
     non_checkpoint_lats = []
     non_checkpoint_elevations = []
-    checkpoint_indices = {cp.checkpoint_index for cp in r.checkpoints}
+    checkpoint_indices = {cp.route_point_index for cp in r.checkpoints}
 
     for i, p in enumerate(r.smooth_points):
         if i not in checkpoint_indices:
