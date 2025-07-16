@@ -50,7 +50,7 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         State('map-graph', 'figure'),
         prevent_initial_call=True
     )
-    def update_selected_index(dropdown_value, map_click_data, current_selected_index, current_map_figure):
+    def handle_route_selection(dropdown_value, map_click_data, current_selected_index, current_map_figure):
         """
         Listens to user interactions from the dropdown and the map to update
         the central selected-route-index store.
@@ -87,10 +87,11 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         print_step("Callbacks", f"Processing selected route index: {selected_route_index}")
         selected_route = spot.routes[selected_route_index]        
         
+        '''attempt to get a cached version of the route. if not, process from scratch.'''
         processed_route = spot.get_processed_route(route_processor, 
                                                 selected_route, 
                                                 selected_route_index)
-                    
+        
         route_info_ui = create_route_info_card(selected_route, processed_route)
         
         # Pass the current figure and let update_map_for_selected_route handle preserving the view
@@ -111,7 +112,7 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         State('map-graph', 'figure'),
         prevent_initial_call=True
     )
-    def handle_checkpoint_selection(selected_data, selected_route_index, current_figure):
+    def handle_checkpoint_clicks(selected_data, selected_route_index, current_figure):
         """
         Handles checkpoint selection from map clicks and updates the figure.
         """
@@ -127,8 +128,11 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
             return no_update, no_update
             
         checkpoint_index = point['customdata'][0]
-        selected_route = spot.routes[selected_route_index]
-        processed_route = route_processor.process_route(selected_route)
+        print(f"Selection (from map data) = {checkpoint_index}")
+        selected_route  = spot.routes[selected_route_index]
+        processed_route = spot.get_processed_route(route_processor, 
+                                                selected_route, 
+                                                selected_route_index)
         
         if checkpoint_index >= len(processed_route.checkpoints):
             return no_update, no_update
@@ -142,34 +146,69 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
                 trace.selectedpoints = [checkpoint_index]
                 break
                 
-        return create_checkpoint_card(checkpoint), fig
-
-    # Add this new callback to update the checkpoint info when navigating
+        return create_checkpoint_card(checkpoint, processed_route), fig
+    
     @app.callback(
         Output('checkpoint-info', 'children', allow_duplicate=True),
-        Input('map-graph', 'figure'),
+        Output('map-graph', 'figure', allow_duplicate=True),
+        Input('prev-checkpoint-button', 'n_clicks'),
+        Input('next-checkpoint-button', 'n_clicks'),
         State('selected-route-index', 'data'),
+        State('map-graph', 'figure'),
         prevent_initial_call=True
     )
-    def update_checkpoint_info_from_figure(figure, selected_route_index):
+    def handle_checkpoint_navigation(prev_clicks, next_clicks, selected_route_index, current_map_figure):
+        """
+        Handles navigation between checkpoints using 'Previous' and 'Next' buttons.
+        """
         if selected_route_index is None:
-            return no_update
-            
-        # Find selected checkpoint from figure
-        selected_index = None
-        for trace in figure['data']:
-            if trace.get('name') == checkpoints_label:
-                selected_index = trace.get('selectedpoints', [None])[0]
-                break
-                
-        if selected_index is None:
-            return no_update
-            
-        selected_route = spot.routes[selected_route_index]
-        processed_route = route_processor.process_route(selected_route)
+            return no_update, no_update
+
+        # Determine which button was clicked
+        triggered_id = callback_context.triggered[0]['prop_id'].split('.')[0]
         
-        if selected_index >= len(processed_route.checkpoints):
-            return no_update
+        selected_route  = spot.routes[selected_route_index]
+        processed_route = spot.get_processed_route(route_processor, 
+                                                selected_route, 
+                                                selected_route_index)
+        
+        total_checkpoints = len(processed_route.checkpoints)
+
+        if total_checkpoints == 0:
+            return no_update, no_update
+
+        # Find the currently selected checkpoint from the map figure
+        current_selected_checkpoint_index = None
+        for trace in current_map_figure['data']:
+            if trace.get('name') == checkpoints_label:
+                if trace.get('selectedpoints'):
+                    current_selected_checkpoint_index = trace.get('selectedpoints')[0]
+                break
+        
+        # If no checkpoint is selected, default to the first one.
+        # This prevents the function from crashing.
+        if current_selected_checkpoint_index is None:
+            current_selected_checkpoint_index = 0
+        
+        new_checkpoint_index = current_selected_checkpoint_index
+
+        if triggered_id == 'prev-checkpoint-button':
+            new_checkpoint_index = max(0, current_selected_checkpoint_index - 1)
+        elif triggered_id == 'next-checkpoint-button':
+            new_checkpoint_index = min(total_checkpoints - 1, current_selected_checkpoint_index + 1)
+        
+        # Only update if the index has changed
+        if new_checkpoint_index == current_selected_checkpoint_index:
+            return no_update, no_update
             
-        checkpoint = processed_route.checkpoints[selected_index]
-        return create_checkpoint_card(checkpoint)
+        print_step("Callbacks", f"Navigating to checkpoint index: {new_checkpoint_index}")
+
+        # Update the figure to highlight the new checkpoint
+        fig = go.Figure(current_map_figure)
+        for trace in fig.data:
+            if trace.name == checkpoints_label:
+                trace.selectedpoints = [new_checkpoint_index]
+                break
+
+        new_checkpoint = processed_route.checkpoints[new_checkpoint_index]
+        return create_checkpoint_card(new_checkpoint, processed_route), fig

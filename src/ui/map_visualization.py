@@ -58,7 +58,7 @@ def add_full_route_to_figure(fig: go.Figure,
     non_checkpoint_lons = []
     non_checkpoint_lats = []
     non_checkpoint_elevations = []
-    checkpoint_indices = {cp.point_index for cp in r.checkpoints}
+    checkpoint_indices = {cp.checkpoint_index for cp in r.checkpoints}
 
     for i, p in enumerate(r.smooth_points):
         if i not in checkpoint_indices:
@@ -95,12 +95,16 @@ def add_checkpoints(fig: go.Figure, r: ProcessedRoute):
     checkpoints = r.checkpoints
     
     # Ensure checkpoints are sorted by their point_index
-    checkpoints = sorted(checkpoints, key=lambda cp: cp.point_index)
+    checkpoints = sorted(checkpoints, key=lambda cp: cp.checkpoint_index)
     
-    checkpoint_lons = [r.smooth_points[cp.point_index].lon for cp in checkpoints]
-    checkpoint_lats = [r.smooth_points[cp.point_index].lat for cp in checkpoints]    
+    checkpoint_lons = [cp.point.lon for cp in checkpoints]
+    checkpoint_lats = [cp.point.lat for cp in checkpoints]    
     checkpoint_customdata = [
-        [idx, cp.name, cp.description, cp.elevation, cp.distance_from_start]
+        [idx, 
+         cp.name, 
+         cp.description, 
+         cp.point.elevation, 
+         r.smooth_points[0].distance_to(cp.point)]
         for idx, cp in enumerate(checkpoints)  # Use enumerate to ensure sequential indexing
     ]
 

@@ -5,8 +5,6 @@ from typing import List, Optional
 import math
 import shapely
 
-MAX_DISTANCE_KM = 3.0
-
 @dataclass
 class GeoPoint:
     """Static geographic point"""
@@ -76,11 +74,7 @@ class Route:
         shapely_point = shapely.Point(point.lon, point.lat)        
         return shapely_point.within(bounds)
 
-    def is_valid_route(self, bounds : List[float]) -> bool:
-        """Проверяет что маршрут полностью находится в допустимой зоне"""
-        if not self.points:
-            return False
-                
+    def is_valid_route(self, bounds : List[float]) -> bool:                
         within = reduce(lambda count, i: count + self._point_within_polygon(bounds, i), self.points, 0)
         fraction_within = within / ( (float) (len(self.points)) )                    
         return fraction_within > 0.5

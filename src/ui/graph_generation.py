@@ -1,8 +1,8 @@
 import plotly.graph_objects as go
 import numpy as np
-from typing import List
+from typing import List, Optional
 
-from src.routes.statistics_collector import ProfilePoint # For logging, if needed
+from src.routes.statistics_collector import ProfilePoint
 
 def get_fill_polygons(distances, values, threshold_value):
     """
@@ -61,12 +61,6 @@ def calculate_velocity_quartiles(velocities):
     median = np.percentile(velocities_np, 50)
     q3 = np.percentile(velocities_np, 75)
     return q1, median, q3
-
-# graph_generation.py
-import plotly.graph_objects as go
-import numpy as np
-from statistics_collector import ProfilePoint
-from typing import List, Optional
 
 def create_elevation_profile_figure(profile_points: List[ProfilePoint],
                                   highlight_distance: Optional[float] = None) -> go.Figure:

@@ -24,13 +24,22 @@ class TrackAnalysis:
     acceleration: float  # m/s²
     distance_from_start: float  # meters
 
-@dataclass
 class Track:
+    
+    points   : List[TrackPoint]
+    route    : Optional[Route]
+    analysis : List[TrackAnalysis]
+    
     def __init__(self, points: List[TrackPoint], route: Optional[Route] = None):
         self.points = points
         self.route = route  # Direct reference to the parent route
         self.analysis: List[TrackAnalysis] = []
-        self._analyze()
+        self._analyze()        
+        
+    def duration(self) -> float:
+        '''returns duration in seconds'''
+        return self.points[-1].elapsed_seconds - \
+               self.points[0].elapsed_seconds
         
     def _filter_implausible_points(self, times: np.ndarray, distances: np.ndarray) -> tuple:
         """Remove points causing unrealistic speeds/accelerations."""
@@ -113,4 +122,17 @@ class Track:
                 distance_from_start=distances[i]
             )
             for i in range(len(self.points))
-        ]
+        ]        
+    
+    def find_closest_track_point(self, timestamp_seconds: float, tolerance : float) -> Optional[TrackPoint]:
+        
+        if(timestamp_seconds < 0 or 
+           timestamp_seconds > self.duration()):
+            return None
+        
+        closest =  [p for p in self.points 
+                    if abs(p.elapsed_seconds - timestamp_seconds) < tolerance]
+        
+        closest.sort(key=lambda p: abs(p.elapsed_seconds - timestamp_seconds))
+        
+        return closest[0] if len(closest) > 0 else None
