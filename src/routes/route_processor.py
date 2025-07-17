@@ -84,7 +84,7 @@ class RouteProcessor:
             end_idx   = end_cp.route_point_index
             
             route_point_start = route.smooth_points[start_idx]
-            route_point_end   = route.smooth_points[end_idx]                        
+            route_point_end   = route.smooth_points[end_idx]                
             
             segment_elevations = [rp.elevation for rp in route.smooth_points[start_idx:end_idx+1]]
             if not segment_elevations:
@@ -111,7 +111,7 @@ class RouteProcessor:
         Creates a smoothed version of the route's points and elevations using
         linear or Akima spline interpolation based on point density.
         """
-        MIN_POINTS_FOR_LINEAR = 100    # Use linear if ≥ 200 points
+        MIN_POINTS_FOR_LINEAR = 500    # Use linear if ≥ 200 points
         MAX_DISTANCE_FOR_LINEAR = 15.0 # Use linear if avg spacing <15m
 
         points     = route.points
@@ -120,7 +120,7 @@ class RouteProcessor:
         for i in range(1, len(points)):
             distances[i] = distances[i-1] + points[i-1].distance_to(points[i])        
                 
-        avg_distance = distances[-1] / (len(points) - 1)
+        avg_distance = points[-1] / (len(points) - 1)
         
         use_linear = (len(points) >= MIN_POINTS_FOR_LINEAR or 
                      avg_distance <= MAX_DISTANCE_FOR_LINEAR)

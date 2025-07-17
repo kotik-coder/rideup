@@ -9,12 +9,19 @@ from src.iio.spot_photo import SpotPhoto
 from src.routes.track import Track
 from src.iio.media_helpers import get_photo_html # Assuming this function exists and is correctly imported
 
+def closest_route_point(a : GeoPoint, route : List[GeoPoint]) -> int:
+    return min(
+        range(len(route)),
+        key=lambda i: route[i].distance_to(a.point)
+    )
+
 class Checkpoint:
     
     name : str = "Точка"
     checkpoint_index : int
     route_point_index : int
-    point : GeoPoint    
+    point : GeoPoint
+    distance_from_origin : float    
     description : str
     photo_html : str
     
@@ -86,8 +93,14 @@ class CheckpointGenerator:
                              smooth_points: List[GeoPoint],
                              associated_tracks: List[Track]) -> List[Checkpoint]:
         
+        distances = [0.0]
+        for i in range(1, len(smooth_points)):
+            p1 = smooth_points[i-1]
+            p2 = smooth_points[i]
+            distances.append(distances[-1] + p1.distance_to(p2))
+
         #ensure both endpoints are always present
-        marker_indices = [0, len(smooth_points) - 1]        
+        marker_indices = [0, len(smooth_points) - 1]
 
         #priority for user-uploaded photo checkpoints
         photo_checkpoints_data = self._add_photo_markers(smooth_points, associated_tracks)                
@@ -97,13 +110,14 @@ class CheckpointGenerator:
         marker_indices.extend(photo_markers)    
         
         #fill gaps with uniform markers
-        self._add_uniform_markers(marker_indices, smooth_points)    
+        self._add_uniform_markers(marker_indices, smooth_points, distances)    
         
         #combine both        
         return self._create_checkpoints_from_markers(
             smooth_points,
-            marker_list,
-            photo_checkpoints_data 
+            marker_indices,
+            photo_checkpoints_data,
+            distances
         )
 
     def _add_photo_markers(self,
@@ -135,7 +149,7 @@ class CheckpointGenerator:
                                   photo: SpotPhoto,
                                   track: Track,
                                   route: List[GeoPoint],
-                                  current_photo_checkpoints: Dict[int, SpotPhoto]) -> Optional[Tuple[GeoPoint, SpotPhoto]]:
+                                  current_photo_checkpoints: Dict[int, SpotPhoto]) -> Optional[Tuple[GeoPoint, int, SpotPhoto]]:
 
         track_start_time = track.points[0].timestamp #start time
         
@@ -151,11 +165,7 @@ class CheckpointGenerator:
            or abs(photo_elapsed - closest_track_point.elapsed_seconds) >= self.MAX_DELAY:
             return None
 
-        closest_index = min(
-            range(len(route)),
-            key=lambda i: route[i].distance_to(closest_track_point.point)
-        )
-        
+        closest_index = closest_route_point(closest_track_point, route)
         closest_point = route[closest_index]
         
         result = None
@@ -168,28 +178,27 @@ class CheckpointGenerator:
         
     def _add_uniform_markers(self,
                              marker_indices: List[int],
-                             smooth_points : List[GeoPoint]):
-        
-        distances = [0.0]
-        for i in range(1, len(smooth_points)):
-            p1 = smooth_points[i-1]
-            p2 = smooth_points[i]
-            distances.append(distances[-1] + p1.distance_to(p2))
+                             smooth_points : List[GeoPoint],
+                             route_distances : List[float]):
             
-        total_length = distances[-1]   
+        if sorted(route_distances) != route_distances:
+            print("Error: distances not monotonic!")
+            return
+
+        total_length = route_distances[-1]   
                 # Determine maximum allowed markers based on 20 per 5 km rule
         max_markers = min( 
                           int(total_length * self.TARGET_DENSITY), 
                           len(smooth_points))
         
-        num_markers = len(marker_indices)        
+        num_markers = len(marker_indices)     
         
         while num_markers < max_markers:
             
-            # Calculate distances between consecutive markers
+            # Calculate distances between consecutive checkpoints
             gaps = [
-                (smooth_points[a].distance_to(smooth_points[b]), a, b)
-                for a, b in zip(marker_indices[:-1], marker_indices[1:])
+                (route_distances[b] - route_distances[a], a, b)
+                for a, b in zip(marker_indices, marker_indices[1:])
             ]
 
             large_gaps    = [g for g in gaps if g[0] > self.TARGET_DENSITY * total_length]
@@ -206,7 +215,8 @@ class CheckpointGenerator:
     def _create_checkpoints_from_markers(self,
                                          smooth_points : List[GeoPoint],
                                          marker_indices: List[int],
-                                         photo_markers: Dict[int, SpotPhoto]) -> List[Checkpoint]:
+                                         photo_markers: Dict[int, SpotPhoto],
+                                         distances : List[float]) -> List[Checkpoint]:
 
         checkpoints = []
         total_indices = len(marker_indices)        
@@ -225,6 +235,8 @@ class CheckpointGenerator:
             else:
                 checkpoint = Checkpoint(i, idx, point)
                 checkpoint.name = f"Точка ({i + 1}/{total_indices})"                                
+
+            checkpoint.distance_from_origin = distances[idx]
 
             checkpoints.append(checkpoint)
             
