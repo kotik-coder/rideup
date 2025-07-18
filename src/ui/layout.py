@@ -60,7 +60,7 @@ def setup_layout(spot: Spot):
         ], style={'margin': '0', 'marginTop': '15px', 'height': f'{bottom_graphs_vh}vh'}),
         dcc.Store(id='route-data-store'),
         dcc.Store(id='selected-route-index'),
-        dcc.Store(id='selected-checkpoint-index'),
+        dcc.Store(id='selected-checkpoint-index'),  
         html.Div(id='initial-load-trigger', style={'display': 'none'})
     ], fluid=True, style={'height': '100vh', 'padding': '0', 'overflowY': 'hidden', 'overflowX': 'hidden'})
 

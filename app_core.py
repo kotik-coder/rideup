@@ -81,7 +81,7 @@ class BitsevskyMapApp:
         print("="*50 + "\n")
 
     def run(self):
-        self.app.run(debug=False)
+        self.app.run(debug=DEBUG)
 
 if __name__ == '__main__':
     app = BitsevskyMapApp()
