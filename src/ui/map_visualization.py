@@ -104,7 +104,7 @@ def add_checkpoints(fig: go.Figure, r: ProcessedRoute):
          cp.name, 
          cp.description, 
          cp.point.elevation, 
-         r.smooth_points[0].distance_to(cp.point)]
+         cp.distance_from_origin]
         for idx, cp in enumerate(checkpoints)  # Use enumerate to ensure sequential indexing
     ]
 

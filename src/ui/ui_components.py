@@ -51,7 +51,7 @@ def create_checkpoint_card(checkpoint, route : ProcessedRoute):
                        className="card-title mb-1 fs-6"),
                 html.P([html.B("Координаты: "), f"{checkpoint.point.lat:.5f}, {checkpoint.point.lon:.5f}"], className="mb-0", style={'fontSize': '0.9em'}),
                 html.P([html.B("Высота: "), f"{checkpoint.point.elevation:.1f} м"], className="mb-0", style={'fontSize': '0.9em'}),
-                html.P([html.B("Расстояние от старта: "), f"{route.smooth_points[0].distance_to(checkpoint.point):.1f} м"], className="mb-0", style={'fontSize': '0.9em'}),
+                html.P([html.B("Расстояние от старта: "), f"{checkpoint.distance_from_origin:.1f} м"], className="mb-0", style={'fontSize': '0.9em'}),
                 html.P(html.Em(checkpoint.description), className="card-text mb-0", style={'fontSize': '0.9em'})
             ], width=6),
             optional_block

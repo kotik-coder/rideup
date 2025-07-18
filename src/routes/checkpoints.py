@@ -1,7 +1,5 @@
 from dataclasses import dataclass
-from functools import reduce
-import math
-from typing import Final, List, Dict, Set, Optional, Tuple
+from typing import Final, List, Dict, Optional, Tuple
 from datetime import datetime, timezone
 
 from src.routes.route import GeoPoint
@@ -12,18 +10,18 @@ from src.iio.media_helpers import get_photo_html # Assuming this function exists
 def closest_route_point(a : GeoPoint, route : List[GeoPoint]) -> int:
     return min(
         range(len(route)),
-        key=lambda i: route[i].distance_to(a.point)
+        key=lambda i: route[i].distance_to(a)
     )
 
 class Checkpoint:
     
-    name : str = "Точка"
-    checkpoint_index : int
-    route_point_index : int
-    point : GeoPoint
-    distance_from_origin : float    
-    description : str
-    photo_html : str
+    name                 : str = "Точка"
+    checkpoint_index     : int
+    route_point_index    : int
+    point                : GeoPoint
+    distance_from_origin : float
+    description          : str
+    photo_html           : str
     
     """
     Represents a single checkpoint on a route.
@@ -93,29 +91,32 @@ class CheckpointGenerator:
                              smooth_points: List[GeoPoint],
                              associated_tracks: List[Track]) -> List[Checkpoint]:
         
+        '''calculates approximate distances based on piecewise linear interpolation'''
         distances = [0.0]
         for i in range(1, len(smooth_points)):
             p1 = smooth_points[i-1]
             p2 = smooth_points[i]
-            distances.append(distances[-1] + p1.distance_to(p2))
+            distances.append(distances[-1] + p1.distance_to(p2))        
 
         #ensure both endpoints are always present
-        marker_indices = [0, len(smooth_points) - 1]
+        marker_indices = set()
+        marker_indices.add(0)
+        marker_indices.add(len(smooth_points) - 1)
 
         #priority for user-uploaded photo checkpoints
         photo_checkpoints_data = self._add_photo_markers(smooth_points, associated_tracks)                
         photo_markers = list(photo_checkpoints_data.keys())
         
-        marker_indices.sort()
-        marker_indices.extend(photo_markers)    
+        marker_indices.update(photo_markers)    
+        sorted_indices = sorted(list(marker_indices))
         
         #fill gaps with uniform markers
-        self._add_uniform_markers(marker_indices, smooth_points, distances)    
+        self._add_uniform_markers(sorted_indices, smooth_points, distances)    
         
         #combine both        
         return self._create_checkpoints_from_markers(
             smooth_points,
-            marker_indices,
+            sorted_indices,
             photo_checkpoints_data,
             distances
         )
@@ -149,7 +150,7 @@ class CheckpointGenerator:
                                   photo: SpotPhoto,
                                   track: Track,
                                   route: List[GeoPoint],
-                                  current_photo_checkpoints: Dict[int, SpotPhoto]) -> Optional[Tuple[GeoPoint, int, SpotPhoto]]:
+                                  current_photo_checkpoints: Dict[int, SpotPhoto]) -> Optional[Tuple[GeoPoint, SpotPhoto]]:
 
         track_start_time = track.points[0].timestamp #start time
         
@@ -165,7 +166,7 @@ class CheckpointGenerator:
            or abs(photo_elapsed - closest_track_point.elapsed_seconds) >= self.MAX_DELAY:
             return None
 
-        closest_index = closest_route_point(closest_track_point, route)
+        closest_index = closest_route_point(closest_track_point.point, route)
         closest_point = route[closest_index]
         
         result = None
@@ -195,7 +196,7 @@ class CheckpointGenerator:
         
         while num_markers < max_markers:
             
-            # Calculate distances between consecutive checkpoints
+            # Calculate approximate distances between consecutive checkpoints
             gaps = [
                 (route_distances[b] - route_distances[a], a, b)
                 for a, b in zip(marker_indices, marker_indices[1:])
@@ -234,13 +235,12 @@ class CheckpointGenerator:
                 checkpoint.name = f"Фототочка ({i + 1}/{total_indices})"
             else:
                 checkpoint = Checkpoint(i, idx, point)
-                checkpoint.name = f"Точка ({i + 1}/{total_indices})"                                
+                checkpoint.name = f"Точка ({i + 1}/{total_indices})"
 
             checkpoint.distance_from_origin = distances[idx]
-
             checkpoints.append(checkpoint)
             
         checkpoints[0].name  = "Старт"
-        checkpoints[-1].name = "Финиш"
+        checkpoints[-1].name = "Финиш"                
 
         return checkpoints

@@ -2,12 +2,47 @@ import math
 from pathlib import Path
 from typing import List
 
-from datetime import datetime 
+from datetime import datetime
+
+import numpy as np 
 
 CACHE_FILE = Path("elevation_cache.json")
 REQUEST_DELAY = 1.0  # Задержка между запросами в секундах
 
 DEBUG = True
+
+# Define WGS-84 ellipsoid constants for high accuracy
+WGS84_A = 6378137.0  # Semi-major axis in meters
+WGS84_F = 1 / 298.257223563  # Flattening
+WGS84_E2 = WGS84_F * (2 - WGS84_F)  # Square of first eccentricity
+
+def geodesic_integrand(t, interp_lat, interp_lon, dlat_dt, dlon_dt):
+    """
+    The function to be integrated to find the arc length.
+    This corresponds to the ds/dt term in the mathematical explanation.
+    """
+    # Get latitude and its derivative at parameter t
+    lat_deg = interp_lat(t)
+    dlat_dt_deg = dlat_dt(t)
+    # Get longitude derivative at parameter t
+    dlon_dt_deg = dlon_dt(t)
+
+    # Convert degrees (from spline) to radians for trigonometric functions
+    lat_rad = np.radians(lat_deg)
+    dlat_dt_rad = np.radians(dlat_dt_deg)
+    dlon_dt_rad = np.radians(dlon_dt_deg)
+
+    # Calculate radii of curvature M and N
+    sin_lat_sq = np.sin(lat_rad)**2
+    den = np.sqrt(1 - WGS84_E2 * sin_lat_sq)
+    
+    M = (WGS84_A * (1 - WGS84_E2)) / (den**3)  # Meridional radius
+    N = WGS84_A / den  # Prime vertical radius
+    
+    # Calculate the term under the square root
+    integrand_val_sq = (M * dlat_dt_rad)**2 + (N * np.cos(lat_rad) * dlon_dt_rad)**2
+    
+    return np.sqrt(integrand_val_sq)
 
 def print_step(prefix : str, message: str, level: str = "INFO"):    
     if(DEBUG):

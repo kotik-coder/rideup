@@ -1,25 +1,25 @@
 # route_processor.py
+from dataclasses import dataclass
 import numpy as np
+from scipy.integrate import quad
 from scipy.interpolate import Akima1DInterpolator, interp1d
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
-from src.ui.map_helpers import print_step
+from src.ui.map_helpers import geodesic_integrand, print_step
 from src.routes.route import GeoPoint, Route
 from src.routes.statistics_collector import StatisticsCollector, Segment
 from src.routes.checkpoints import Checkpoint, CheckpointGenerator
 from src.routes.track import Track
 from src.iio.spot_photo import SpotPhoto
 
-PHOTO_CHECKPOINT_DISTANCE_THRESHOLD = 50.0  # meters
-
 class ProcessedRoute:
     smooth_points: List[GeoPoint]  # Interpolated points
-    segments: List[Segment]
+    segments: List[Segment]    
     checkpoints: List[Checkpoint]
     bounds: List[float]
-    
+        
     def __init__(self, smooth_points : List[GeoPoint]):
-        self.smooth_points = smooth_points            
+        self.smooth_points = smooth_points          
     
     def find_closest_route_point(self, point: GeoPoint) -> Tuple[int, GeoPoint]:
 
@@ -28,7 +28,59 @@ class ProcessedRoute:
             key=lambda i: self.smooth_points[i].distance_to(point)
         )
         
-        return index, self.smooth_points[index]        
+        return index, self.smooth_points[index]
+    
+    def calculate_precise_distances(self, interp_lat, interp_lon):
+        """
+        Calculates the geodesic distance from the origin for each checkpoint.
+
+        This method integrates the distance along the provided latitude and longitude
+        spline interpolations (e.g., scipy.interpolate.PPoly objects) and assigns the
+        cumulative distance to each checkpoint's `distance_from_origin` attribute.
+
+        Args:
+            interp_lat: A SciPy spline object for latitude vs. parameter t.
+            interp_lon: A SciPy spline object for longitude vs. parameter t.
+        """
+        if not self.checkpoints:
+            print_step("Route processor", "⚠️ Checkpoint list is empty. No distances to calculate.")
+            return
+
+        # Get the derivative functions from the spline objects (nu=1 for 1st derivative)
+        dlat_dt = interp_lat.derivative(nu=1)
+        dlon_dt = interp_lon.derivative(nu=1)
+
+        # The first checkpoint is the origin, so its distance is zero
+        self.checkpoints[0].distance_from_origin = 0.0
+        
+        cumulative_distance = 0.0
+        last_index = len(self.smooth_points) - 1
+        t_checkpoints = [cp.route_point_index/last_index
+                         for cp in self.checkpoints]
+        t_prev = t_checkpoints[0]
+
+        # Iterate through the remaining checkpoints to calculate cumulative distance
+        for i in range(1, len(self.checkpoints)):
+            checkpoint = self.checkpoints[i]
+            t_curr = t_checkpoints[i]
+            
+            # Integrate over the segment from the previous to the current checkpoint
+            # The result is a tuple (value, estimated_error)
+            segment_distance, _ = quad(
+                geodesic_integrand,
+                t_prev,
+                t_curr,
+                args=(interp_lat, interp_lon, dlat_dt, dlon_dt)
+            )
+            
+            # Add segment distance to the cumulative total
+            cumulative_distance += segment_distance
+            checkpoint.distance_from_origin = cumulative_distance
+            
+            # Update the previous parameter value for the next iteration
+            t_prev = t_curr
+
+        print_step("Route processor", "✅ Precise distances calculated and assigned to all checkpoints.")
 
 class RouteProcessor:
     def __init__(self, local_photos: List[SpotPhoto], all_tracks: List[Track]):
@@ -44,19 +96,22 @@ class RouteProcessor:
         
         print_step("RouteProcessor", f"Starting processing for route: {route.name}")        
 
-        smooth_points = self._create_smooth_route(route)
+        smooth_points, interp_lat, interp_lon, interp_ele \
+                = self._create_smooth_route(route)
         print_step("RouteProcessor", f"Route '{route.name}': Generated {len(smooth_points)} smoothed points.")
 
         # Get tracks associated with this route
         associated_tracks = [t for t in self.all_tracks if t.route == route]        
-        processed_route = ProcessedRoute( smooth_points )
+        processed_route = ProcessedRoute( smooth_points )                
         
         processed_route.checkpoints = self.checkpoint_generator.generate_checkpoints(
             processed_route.smooth_points,
             associated_tracks
         )
         print_step("RouteProcessor", f"Route '{route.name}': Generated {len(processed_route.checkpoints)} checkpoints.")
-        
+                
+        if isinstance(interp_lat, Akima1DInterpolator):
+            processed_route.calculate_precise_distances(interp_lat, interp_lon)
         processed_route.segments = self._calculate_segments(processed_route)
         
         lons = [p.lon for p in route.points]
@@ -95,7 +150,7 @@ class RouteProcessor:
             max_seg_elevation = max(segment_elevations)
             
             segments.append(Segment(
-                distance=route_point_start.distance_to(route_point_end),
+                distance=end_cp.distance_from_origin - start_cp.distance_from_origin,
                 elevation_gain=max(0, max_seg_elevation - route_point_start.elevation),
                 elevation_loss=max(0, route_point_start.elevation - min_seg_elevation),
                 net_elevation=route_point_end.elevation - route_point_start.elevation,
@@ -106,26 +161,27 @@ class RouteProcessor:
             ))
         return segments
 
-    def _create_smooth_route(self, route: Route) -> List[GeoPoint]:
+    def _create_smooth_route(self, route: Route) -> \
+        Tuple[List[GeoPoint], any, any, any]:
         """
         Creates a smoothed version of the route's points and elevations using
         linear or Akima spline interpolation based on point density.
         """
-        MIN_POINTS_FOR_LINEAR = 500    # Use linear if ≥ 200 points
+        MIN_POINTS_FOR_LINEAR   = 100  # Use linear if ≥ 100 points
         MAX_DISTANCE_FOR_LINEAR = 15.0 # Use linear if avg spacing <15m
 
-        points     = route.points
+        points = route.points
 
         distances = np.zeros(len(points))
         for i in range(1, len(points)):
             distances[i] = distances[i-1] + points[i-1].distance_to(points[i])        
                 
-        avg_distance = points[-1] / (len(points) - 1)
+        avg_distance = distances[-1] / (len(points) - 1)
         
-        use_linear = (len(points) >= MIN_POINTS_FOR_LINEAR or 
-                     avg_distance <= MAX_DISTANCE_FOR_LINEAR)
+        use_akima = (len(points) < MIN_POINTS_FOR_LINEAR) or \
+                     (avg_distance > MAX_DISTANCE_FOR_LINEAR)
         
-        method = "linear" if use_linear else "Akima"
+        method = "Akima" if use_akima else "linear"
         print_step("Smoothing", 
                 f"Route '{route.name}': {len(points)} points, "
                 f"avg spacing {avg_distance:.1f}m → {method} interpolation")
@@ -140,14 +196,15 @@ class RouteProcessor:
             lats = [p.lat for p in points]
             lons = [p.lon for p in points]
             
-            if use_linear:
-                interp_lat = interp1d(t,  lats, kind='linear')
-                interp_lon = interp1d(t,  lons, kind='linear')
-                interp_elev = interp1d(t, route.elevations, kind='linear')
+            if use_akima:
+                interp_lat  = Akima1DInterpolator(t, lats)
+                interp_lon  = Akima1DInterpolator(t, lons)
+                interp_elev = Akima1DInterpolator(t, route.elevations)                
             else:
-                interp_lat = Akima1DInterpolator(t, lats)
-                interp_lon = Akima1DInterpolator(t, lons)
-                interp_elev = Akima1DInterpolator(t, route.elevations)
+                '''at least generate uniform points'''
+                interp_lat  = interp1d(t,  lats, kind='linear')
+                interp_lon  = interp1d(t,  lons, kind='linear')
+                interp_elev = interp1d(t, route.elevations, kind='linear')
 
             smooth_points = [
                 GeoPoint(lat, lon, elev) 
@@ -156,9 +213,9 @@ class RouteProcessor:
                     interp_lon(t_smooth),
                     interp_elev(t_smooth)
                 )
-            ]
-            return smooth_points
+            ]            
+            return (smooth_points, interp_lat, interp_lon, interp_elev)
 
         except Exception as e:
             print_step("Error", f"Smoothing failed for {route.name}: {str(e)}", level="ERROR")
-            return route.points.copy()
+            return route.points.copy(), None, None, None
