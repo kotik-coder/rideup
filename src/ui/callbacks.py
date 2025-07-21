@@ -1,5 +1,5 @@
 # callbacks.py
-from dash import Input, Output, State, callback_context, no_update, html
+from dash import ClientsideFunction, Input, Output, State, callback_context, no_update, html
 
 from src.ui.map_helpers import print_step
 from src.ui.map_visualization import *
@@ -9,6 +9,16 @@ from src.routes.spot import Spot
 from src.ui.ui_components import create_checkpoint_card, create_route_info_card
 
 def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
+    
+    app.clientside_callback(
+        ClientsideFunction(
+            namespace='clientside',
+            function_name='getDimensions'
+        ),
+        Output('map-dimensions-store', 'data'),
+        Input('map-graph', 'id') # Trigger once on page load
+    )
+    
     """
     Registers all Dash callbacks with the provided Dash app instance.
     Handles route selection from both the dropdown and map clicks.
@@ -33,9 +43,10 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         Input('route-selector', 'value'),
         Input('map-graph', 'clickData'),
         State('map-graph', 'figure'),
+        [State('map-dimensions-store', 'data')],
         prevent_initial_call=True
     )
-    def handle_route_selection(dropdown_value, map_click_data, current_map_figure):
+    def handle_route_selection(dropdown_value, map_click_data, current_map_figure, map_dims):
         """
         Handles route selection from both dropdown and map clicks.
         Map clicks update the dropdown value through a separate callback.
@@ -44,7 +55,7 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
 
         if triggered_id == 'route-selector' and dropdown_value is not None:
             print_step("Callbacks", f"Route {dropdown_value} selected via dropdown.")
-            return process_route_selection(dropdown_value, current_map_figure)
+            return process_route_selection(dropdown_value, current_map_figure, map_dims)
         
         if triggered_id == 'map-graph' and map_click_data:
             point = map_click_data['points'][0]
@@ -52,7 +63,7 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
                 clicked_route_index = point['customdata']
                 print_step("Callbacks", f"Route {clicked_route_index} selected via map click.")
                 # Return the selection but don't update dropdown here
-                return process_route_selection(clicked_route_index, current_map_figure)
+                return process_route_selection(clicked_route_index, current_map_figure, map_dims)
 
         return no_update, no_update, no_update, no_update
 
@@ -70,15 +81,17 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         point        = map_click_data['points'][0]
         
         '''each point is assigned the same identifying number as the route
-        see map_visualization.py'''
+        see map_visualization.py'''            
             
         if 'customdata' in point:
-            route_number = point['customdata']
-            return route_number
-        
+            data = point['customdata']
+            if type(data) is int:
+                return data
+            
         return no_update
     
-    def process_route_selection(selected_route_index, current_map_figure):
+    def process_route_selection(selected_route_index, current_map_figure, map_dims):
+        print(map_dims)
         """
         Helper function to process route selection and generate UI components.
         """
@@ -87,7 +100,7 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         processed_route = spot.get_processed_route(route_processor, selected_route, selected_route_index)
 
         route_info_ui = create_route_info_card(selected_route, processed_route)
-        updated_map_figure = update_map_for_selected_route(current_map_figure, spot, selected_route, processed_route)
+        updated_map_figure = update_map_for_selected_route(current_map_figure, spot, selected_route, processed_route, map_dims)
         add_checkpoints(updated_map_figure, processed_route)
 
         checkpoint_info_ui = html.Div()

@@ -1,9 +1,9 @@
 # map_visualization.py
 import numpy as np
 import plotly.graph_objects as go
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
-from src.ui.map_helpers import print_step
+from src.ui.map_helpers import bounds_to_zoom, print_step
 from src.routes.route import Route
 from src.routes.route_processor import ProcessedRoute
 from src.routes.spot import Spot
@@ -194,8 +194,36 @@ def center_on_feature(fig : go.Figure, bounds : List[float]):
     fig.update_layout(
         map_style="open-street-map",
         map=dict(
-            bounds=square
-        ),
+            bounds=square,
+            center=dict(lat=center_lat, lon=center_lon),
+        ),        
+        margin={"r":0,"t":0,"l":0,"b":0},
+        showlegend=False,
+        clickmode='event+select'
+    )
+    
+def zoom_on_feature(fig : go.Figure, bounds : List[float], width : int , height : int):    
+    
+    if len(bounds) != 4:
+        print_step("Map", "Invalid bounds when centering!")
+    
+    lon_min, lat_min, lon_max, lat_max = bounds
+    
+    center_lat = (lat_min + lat_max) / 2
+    center_lon = (lon_min + lon_max) / 2
+    
+    bounds_dict = {"max_lon" : lon_max,
+                   "min_lon" : lon_min,
+                   "max_lat" : lat_max,
+                   "min_lat" : lat_min}
+    
+    calculated_zoom = bounds_to_zoom(bounds_dict, width, height)
+    
+    fig.update_layout(
+        map_style="open-street-map",
+        map=dict(
+            center=dict(lat=center_lat, lon=center_lon),
+            zoom=calculated_zoom,),
         margin={"r":0,"t":0,"l":0,"b":0},
         showlegend=False,
         clickmode='event+select'
@@ -204,7 +232,8 @@ def center_on_feature(fig : go.Figure, bounds : List[float]):
 def update_map_for_selected_route(current_map_figure: dict, 
                                   spot: Spot,  
                                   route: Route,                                 
-                                  processed_route: ProcessedRoute) -> go.Figure:
+                                  processed_route: ProcessedRoute,
+                                  map_dims : Dict[str,int]) -> go.Figure:
     """
     Clears existing route traces and plots the fully processed route.
     Returns the updated figure.
@@ -221,7 +250,16 @@ def update_map_for_selected_route(current_map_figure: dict,
     
     fig.data = traces_to_keep    
     
-    center_on_feature(fig, processed_route.bounds)
+    # Use the dimensions to zoom correctly instead of just centering.
+    if map_dims:
+        height = map_dims['height']
+        if height < 1:
+            height = int( map_dims['width'] * 9/16 )
+        zoom_on_feature(fig, processed_route.bounds, map_dims['width'], height)
+    else:
+        # Fallback if dimensions aren't ready yet
+        center_on_feature(fig, processed_route.bounds)
+        
     add_full_route_to_figure(fig, processed_route)
     
     print_step("Map Drawing", f"Карта обновлена для выбранного маршрута: {route.name}")

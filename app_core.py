@@ -20,25 +20,16 @@ class BitsevskyMapApp:
         # Configure Dash to be quieter
         self.app = dash.Dash(__name__,
                           external_stylesheets=[dbc.themes.BOOTSTRAP],
-                          suppress_callback_exceptions=True)                                
+                          suppress_callback_exceptions=True)
 
         # Disable Dash devtools verbose logging
         if not DEBUG:
             log = logging.getLogger('werkzeug')
             log.setLevel(logging.ERROR)
             self.app.logger.setLevel(logging.WARNING)
-
-        local_photos_dir = os.path.join(os.path.dirname(__file__), 'local_photos')
-
-        self.app.server.add_url_rule(
-            '/local_photos/<path:filename>',
-            endpoint='local_photos',
-            view_func=lambda filename: send_from_directory(local_photos_dir, filename)
-        )
-        
-        # Configure static files
-        self.app.css.config.serve_locally = True
-        self.app.scripts.config.serve_locally = True            
+            
+        assets_path = os.getcwd() +'/assets'
+        app = dash.Dash(__name__,assets_folder=assets_path)
     
     def __init__(self):
         self._configure_server()
