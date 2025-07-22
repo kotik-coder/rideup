@@ -7,14 +7,12 @@ from typing import Dict, List, Tuple
 
 from src.ui.map_helpers import geodesic_integrand, print_step
 from src.routes.route import GeoPoint, Route
-from src.routes.statistics_collector import StatisticsCollector, Segment
 from src.routes.checkpoints import Checkpoint, CheckpointGenerator
 from src.routes.track import Track
 from src.iio.spot_photo import SpotPhoto
 
 class ProcessedRoute:
     smooth_points: List[GeoPoint]  # Interpolated points
-    segments: List[Segment]    
     checkpoints: List[Checkpoint]
     bounds: List[float]
         
@@ -86,7 +84,6 @@ class RouteProcessor:
     def __init__(self, local_photos: List[SpotPhoto], all_tracks: List[Track]):
         self.checkpoint_generator = CheckpointGenerator(local_photos)
         self.all_tracks = all_tracks
-        self.stats_collector = StatisticsCollector()
 
     def process_route(self, route: Route) -> ProcessedRoute:
         """Main processing pipeline for a route."""
@@ -112,54 +109,13 @@ class RouteProcessor:
                 
         if isinstance(interp_lat, Akima1DInterpolator):
             processed_route.calculate_precise_distances(interp_lat, interp_lon)
-        processed_route.segments = self._calculate_segments(processed_route)
         
         lons = [p.lon for p in route.points]
         lats = [p.lat for p in route.points]
         
-        processed_route.bounds = [min(lons), min(lats), max(lons), max(lats)]            
+        processed_route.bounds = [min(lons), min(lats), max(lons), max(lats)]                
 
-        print_step("RouteProcessor", f"Route '{route.name}': Generated {len(processed_route.segments)} segments.")
-
-        return processed_route
-    
-    def _calculate_segments(self, route : ProcessedRoute) -> List[Segment]:
-        """Calculates segments between consecutive checkpoints."""
-        checkpoints = route.checkpoints
-        if len(checkpoints) < 2:
-            print_step("RouteProcessor", "Segment calculation: Not enough checkpoints. Returning empty list.")
-            return []
-
-        segments = []
-        for i in range(1, len(checkpoints)):
-            start_cp = checkpoints[i-1]
-            end_cp   = checkpoints[i]
-
-            start_idx = start_cp.route_point_index
-            end_idx   = end_cp.route_point_index
-            
-            route_point_start = route.smooth_points[start_idx]
-            route_point_end   = route.smooth_points[end_idx]                
-            
-            segment_elevations = [rp.elevation for rp in route.smooth_points[start_idx:end_idx+1]]
-            if not segment_elevations:
-                print_step("RouteProcessor", f"Segment calculation: Segment from {start_idx} to {end_idx} has no elevation data. Skipping.", level="WARNING")
-                continue
-
-            min_seg_elevation = min(segment_elevations)
-            max_seg_elevation = max(segment_elevations)
-            
-            segments.append(Segment(
-                distance=end_cp.distance_from_origin - start_cp.distance_from_origin,
-                elevation_gain=max(0, max_seg_elevation - route_point_start.elevation),
-                elevation_loss=max(0, route_point_start.elevation - min_seg_elevation),
-                net_elevation=route_point_end.elevation - route_point_start.elevation,
-                min_elevation=min_seg_elevation,
-                max_elevation=max_seg_elevation,
-                start_checkpoint_index=i-1,
-                end_checkpoint_index=i
-            ))
-        return segments
+        return processed_route   
 
     def _create_smooth_route(self, route: Route) -> \
         Tuple[List[GeoPoint], any, any, any]:

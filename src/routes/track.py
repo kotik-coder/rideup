@@ -64,11 +64,11 @@ class Track:
         """Central difference + median + adaptive Savitzky-Golay."""
         # Step 1: Central difference with edge handling
         speeds = np.zeros_like(distances)
-        if len(times) >= 2:
-            speeds[1:-1] = (distances[2:] - distances[:-2]) / (times[2:] - times[:-2])  # Central
-            speeds[0] = (distances[1] - distances[0]) / (times[1] - times[0])  # Forward
-            speeds[-1] = (distances[-1] - distances[-2]) / (times[-1] - times[-2])  # Backward
         
+        speeds[1:-1] = (distances[2:] - distances[:-2]) / (times[2:] - times[:-2])  # Central
+        speeds[0]    = (distances[1]  - distances[0] )  / (times[1]  - times[0])  # Forward
+        speeds[-1]   = (distances[-1] - distances[-2])  / (times[-1] - times[-2])  # Backward
+    
         # Step 2: Median filter to kill spikes
         speeds = medfilt(speeds, kernel_size=5 if len(speeds) >= 5 else 3)
         
@@ -84,19 +84,15 @@ class Track:
         
         # Step 5: Calculate acceleration with sanity checks
         accelerations = np.zeros_like(speeds)
-        if len(speeds) >= 2:
-            accelerations[1:-1] = (speeds[2:] - speeds[:-2]) / (times[2:] - times[:-2])
-            accelerations = np.clip(accelerations, -MAX_PLAUSIBLE_ACCEL, MAX_PLAUSIBLE_ACCEL)
+        accelerations[1:-1] = (speeds[2:] - speeds[:-2]) / (times[2:] - times[:-2])
+        accelerations = np.clip(accelerations, -MAX_PLAUSIBLE_ACCEL, MAX_PLAUSIBLE_ACCEL)
         
         return speeds, accelerations
 
     def _analyze(self):
-        if len(self.points) < 2:
-            self.analysis = [TrackAnalysis(0.0, 0.0, 0.0) for _ in self.points]
-            return
-
+                
         # Prepare data
-        times = np.array([p.elapsed_seconds for p in self.points])
+        times     = np.array([p.elapsed_seconds for p in self.points])
         distances = np.cumsum([0.0] + [self.points[i].point.distance_to(self.points[i+1].point) 
                               for i in range(len(self.points)-1)])
         

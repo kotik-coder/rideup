@@ -16,15 +16,20 @@ def create_route_info_card(route : Route, processed_route : ProcessedRoute):
     Returns:
         html.Div containing the route information card
     """
+    
+    mean_elevation = np.mean([e for e in route.elevations])
+    gain_elevation = max(0, np.max([p.elevation for p in route.points]) - mean_elevation)
+    loss_elevation = max(0, mean_elevation - np.min([p.elevation for p in route.points]) )
+    
     return html.Div([
         html.H5(route.name, className="mb-1 fs-6"),
         html.P(f"Длина маршрута: {route.total_distance:.2f} м", 
               className="mb-1", style={'fontSize': '0.9em'}),
-        html.P(f"Средняя высота: {np.mean([e for e in route.elevations]):.1f} м", 
+        html.P(f"Средняя высота: {mean_elevation:.1f} м", 
               className="mb-1", style={'fontSize': '0.9em'}),
-        html.P(f"Набор высоты: {sum(s.elevation_gain for s in processed_route.segments):.1f} м", 
+        html.P(f"Набор высоты: {gain_elevation:.1f} м", 
               className="mb-1", style={'fontSize': '0.9em'}),
-        html.P(f"Потеря высоты: {sum(s.elevation_loss for s in processed_route.segments):.1f} м", 
+        html.P(f"Потеря высоты: {loss_elevation:.1f} м", 
               className="mb-0", style={'fontSize': '0.9em'}),
     ])
 

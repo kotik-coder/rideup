@@ -78,10 +78,23 @@ def add_full_route_to_figure(fig: go.Figure,
                 opacity=1.0,  # Force full opacity
                 colorbar=dict(
                     title='Высота (м)',
-                    x=0.05,
+                    x=0.01,  # Move more to the left
+                    y=0.85,   # Position above the graphs
                     xanchor='left',
-                    len=0.75,
-                    thickness=20
+                    yanchor='top',
+                    len=0.3,  # Make it shorter
+                    thickness=15,  # Make it narrower
+                    title_font=dict(
+                        size=12,
+                        color='black'
+                    ),
+                    tickfont=dict(
+                        size=10,
+                        color='black'
+                    ),
+                    bgcolor='rgba(255,255,255,0.5)',  # Semi-transparent white background
+                    outlinecolor='black',
+                    outlinewidth=1
                 ),
             ),
             hoverinfo="none",
@@ -217,7 +230,7 @@ def zoom_on_feature(fig : go.Figure, bounds : List[float], width : int , height 
                    "max_lat" : lat_max,
                    "min_lat" : lat_min}
     
-    calculated_zoom = bounds_to_zoom(bounds_dict, width, height)
+    calculated_zoom = bounds_to_zoom(bounds_dict, width, height, padding = 0.05)
     
     fig.update_layout(
         map_style="open-street-map",

@@ -7,6 +7,7 @@ from src.routes.route_processor import RouteProcessor
 from src.routes.spot import Spot
 
 from src.ui.ui_components import create_checkpoint_card, create_route_info_card
+from src.ui.graph_generation import create_elevation_profile_figure, create_velocity_profile_figure
 
 def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
     
@@ -197,3 +198,61 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
             return create_checkpoint_card(new_checkpoint, processed_route), new_checkpoint_index, fig
         
         return no_update, no_update, no_update
+        
+    @app.callback(
+        Output('elevation-profile', 'figure'),
+        Output('velocity-profile', 'figure'),
+        Input('selected-route-index', 'data'),
+        Input('selected-checkpoint-index', 'data'),
+        State('selected-route-index', 'data'),
+        prevent_initial_call=True
+    )
+    def update_profile_graphs(route_trigger, cp_trigger, selected_route_index):
+        """
+        Updates elevation and velocity profile graphs when a route is selected or checkpoint changes.
+        """
+        if selected_route_index is None:
+            return go.Figure(), go.Figure()
+        
+        # Get the current route and processed route
+        selected_route = spot.routes[selected_route_index]
+        processed_route = spot.get_processed_route(route_processor, selected_route, selected_route_index)
+        
+        # Get the profiles from the route
+        profiles = spot.stats_collector.generate_route_profiles(
+            processed_route, 
+            selected_route, 
+            [t for t in spot.tracks if t.route == selected_route]
+        )
+        
+        # Prepare checkpoint data for the elevation profile
+        checkpoint_data = []
+        if processed_route.checkpoints:
+            checkpoint_data = [
+                {
+                    'distance_from_origin': cp.distance_from_origin,
+                    'index': i
+                }
+                for i, cp in enumerate(processed_route.checkpoints)
+            ]
+        
+        # Determine highlight distance if a checkpoint is selected
+        highlight_distance = None
+        if cp_trigger is not None \
+            and processed_route.checkpoints \
+            and cp_trigger < len(processed_route.checkpoints):            
+                
+            highlight_distance = processed_route.checkpoints[cp_trigger].distance_from_origin
+        
+        # Create the figures
+        elevation_fig = create_elevation_profile_figure(
+            profiles['elevation_profile'], 
+            highlight_distance
+        )
+        
+        velocity_fig = create_velocity_profile_figure(
+            profiles['velocity_profile'], 
+            highlight_distance
+        )
+        
+        return elevation_fig, velocity_fig
