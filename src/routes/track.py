@@ -1,16 +1,18 @@
 # track.py
 import numpy as np
 from scipy.signal import medfilt, savgol_filter
+from scipy.interpolate import Akima1DInterpolator
 from dataclasses import dataclass
 from typing import List, Optional
 from datetime import datetime
 
 from src.routes.route import GeoPoint, Route
 
-# Constants for MTB physics (adjust based on your riding style)
-MAX_PLAUSIBLE_SPEED = 47.2  # m/s (~170 km/h, beyond downhill world record)
-MAX_PLAUSIBLE_ACCEL = 10.0  # m/s² (aggressive MTB acceleration)
-MIN_TIME_DELTA = 0.1  # seconds (ignore GPS points too close in time)
+# Constants
+MAX_PLAUSIBLE_SPEED = 47.2  # m/s
+MAX_PLAUSIBLE_ACCEL = 10.0   # m/s²
+MAX_VERTICAL_SPEED = 10.0    # m/s (unlikely to exceed this climbing/descending rate)
+MIN_TIME_DELTA = 0.1         # seconds
 
 @dataclass
 class TrackPoint:
@@ -20,115 +22,127 @@ class TrackPoint:
 
 @dataclass
 class TrackAnalysis:
-    speed: float  # m/s
-    acceleration: float  # m/s²
-    distance_from_start: float  # meters
+    horizontal_speed: float    # m/s
+    vertical_speed: float      # m/s
+    horizontal_accel: float    # m/s²
+    vertical_accel: float      # m/s²
+    distance_from_start: float # meters
 
 class Track:
-    
+
     points   : List[TrackPoint]
     route    : Optional[Route]
     analysis : List[TrackAnalysis]
     
     def __init__(self, points: List[TrackPoint], route: Optional[Route] = None):
         self.points = points
-        self.route = route  # Direct reference to the parent route
+        self.route = route
         self.analysis: List[TrackAnalysis] = []
-        self._analyze()        
+        self._analyze()
         
     def duration(self) -> float:
-        '''returns duration in seconds'''
-        return self.points[-1].elapsed_seconds - \
-               self.points[0].elapsed_seconds
+        return self.points[-1].elapsed_seconds - self.points[0].elapsed_seconds
         
-    def _filter_implausible_points(self, times: np.ndarray, distances: np.ndarray) -> tuple:
-        """Remove points causing unrealistic speeds/accelerations."""
-        valid_indices = []
+    def _filter_implausible_points(self, times: np.ndarray, distances: np.ndarray, elevations: np.ndarray) -> tuple:
+        valid_indices = [0]
         prev_valid_idx = 0
         
         for i in range(1, len(times)):
             dt = times[i] - times[prev_valid_idx]
             if dt < MIN_TIME_DELTA:
-                continue  # Skip too-close points
-            
+                continue
+                
             dd = distances[i] - distances[prev_valid_idx]
-            raw_speed = dd / dt
+            dh = elevations[i] - elevations[prev_valid_idx]
             
-            if raw_speed <= MAX_PLAUSIBLE_SPEED:
+            horizontal_speed = dd / dt
+            vertical_speed = dh / dt
+            
+            if (horizontal_speed <= MAX_PLAUSIBLE_SPEED and 
+                abs(vertical_speed) <= MAX_VERTICAL_SPEED):
                 valid_indices.append(i)
                 prev_valid_idx = i
         
-        return times[valid_indices], distances[valid_indices]
+        return (times[valid_indices], 
+                distances[valid_indices], 
+                elevations[valid_indices])
 
-    def _calculate_robust_speeds(self, times: np.ndarray, distances: np.ndarray) -> tuple:
-        """Central difference + median + adaptive Savitzky-Golay."""
-        # Step 1: Central difference with edge handling
-        speeds = np.zeros_like(distances)
+    def _calculate_motion_components(self, times: np.ndarray, 
+                                   distances: np.ndarray, 
+                                   elevations: np.ndarray) -> tuple:
+        """Calculate horizontal and vertical motion using Akima interpolation"""
+        # Create Akima interpolators
+        dist_interp = Akima1DInterpolator(times, distances)
+        elev_interp = Akima1DInterpolator(times, elevations)
         
-        speeds[1:-1] = (distances[2:] - distances[:-2]) / (times[2:] - times[:-2])  # Central
-        speeds[0]    = (distances[1]  - distances[0] )  / (times[1]  - times[0])  # Forward
-        speeds[-1]   = (distances[-1] - distances[-2])  / (times[-1] - times[-2])  # Backward
-    
-        # Step 2: Median filter to kill spikes
-        speeds = medfilt(speeds, kernel_size=5 if len(speeds) >= 5 else 3)
+        # Calculate derivatives (velocities)
+        h_speeds = dist_interp.derivative()(times)
+        v_speeds = elev_interp.derivative()(times)
         
-        # Step 3: Cap speeds to physical limits
-        speeds = np.clip(speeds, 0.0, MAX_PLAUSIBLE_SPEED)
+        # Smooth velocities
+        h_speeds = self._smooth_series(h_speeds)
+        v_speeds = self._smooth_series(v_speeds)
         
-        # Step 4: Adaptive Savitzky-Golay (skip if too noisy)
-        if len(speeds) > 10:
+        # Calculate accelerations from smoothed velocities
+        h_accels = np.gradient(h_speeds, times)
+        v_accels = np.gradient(v_speeds, times)
+        
+        # Apply physical limits
+        h_speeds = np.clip(h_speeds, 0.0, MAX_PLAUSIBLE_SPEED)
+        v_speeds = np.clip(v_speeds, -MAX_VERTICAL_SPEED, MAX_VERTICAL_SPEED)
+        h_accels = np.clip(h_accels, -MAX_PLAUSIBLE_ACCEL, MAX_PLAUSIBLE_ACCEL)
+        v_accels = np.clip(v_accels, -MAX_PLAUSIBLE_ACCEL, MAX_PLAUSIBLE_ACCEL)
+        
+        return h_speeds, v_speeds, h_accels, v_accels
+
+    def _smooth_series(self, data: np.ndarray) -> np.ndarray:
+        """Apply median and Savitzky-Golay filtering"""
+        if len(data) >= 5:
+            data = medfilt(data, kernel_size=5)
+        if len(data) > 10:
             try:
-                speeds = savgol_filter(speeds, window_length=min(11, len(speeds)), polyorder=2)
+                data = savgol_filter(data, 
+                                    window_length=min(11, len(data)), 
+                                    polyorder=2)
             except:
-                pass  # Fallback to median-filtered speeds
-        
-        # Step 5: Calculate acceleration with sanity checks
-        accelerations = np.zeros_like(speeds)
-        accelerations[1:-1] = (speeds[2:] - speeds[:-2]) / (times[2:] - times[:-2])
-        accelerations = np.clip(accelerations, -MAX_PLAUSIBLE_ACCEL, MAX_PLAUSIBLE_ACCEL)
-        
-        return speeds, accelerations
+                pass
+        return data
 
     def _analyze(self):
-                
-        # Prepare data
-        times     = np.array([p.elapsed_seconds for p in self.points])
-        distances = np.cumsum([0.0] + [self.points[i].point.distance_to(self.points[i+1].point) 
-                              for i in range(len(self.points)-1)])
+        # Prepare data arrays
+        times = np.array([p.elapsed_seconds for p in self.points])
+        distances = np.cumsum([0.0] + [
+            self.points[i].point.distance_to(self.points[i+1].point) 
+            for i in range(len(self.points)-1)
+        ])
+        elevations = np.array([p.point.elevation for p in self.points])
         
-        # Step 0: Pre-filter implausible points (e.g., GPS glitches)
-        filtered_times, filtered_distances = self._filter_implausible_points(times, distances)
-        
-        if len(filtered_times) < 2:
+        # Filter implausible points
+        filtered_data = self._filter_implausible_points(times, distances, elevations)
+        if len(filtered_data[0]) < 2:
             print("Warning: Not enough valid points after filtering")
-            self.analysis = [TrackAnalysis(0.0, 0.0, distances[i]) for i in range(len(times))]
             return
+            
+        # Calculate motion components
+        h_speeds, v_speeds, h_accels, v_accels = self._calculate_motion_components(*filtered_data)
         
-        # Step 1: Compute speeds/accelerations
-        speeds, accelerations = self._calculate_robust_speeds(filtered_times, filtered_distances)
-        
-        # Step 2: Map back to original points (interpolate if needed)
-        final_speeds = np.interp(times, filtered_times, speeds)
-        final_accels = np.interp(times, filtered_times, accelerations)
-        
+        # Create analysis points
         self.analysis = [
             TrackAnalysis(
-                speed=final_speeds[i],
-                acceleration=final_accels[i],
-                distance_from_start=distances[i]
+                horizontal_speed=float(h_speeds[i]),
+                vertical_speed=float(v_speeds[i]),
+                horizontal_accel=float(h_accels[i]),
+                vertical_accel=float(v_accels[i]),
+                distance_from_start=float(distances[i])
             )
-            for i in range(len(self.points))
-        ]        
-    
-    def find_closest_track_point(self, timestamp_seconds: float, tolerance : float) -> Optional[TrackPoint]:
-        
-        if(timestamp_seconds < 0 or 
-           timestamp_seconds > self.duration()):
+            for i in range(len(h_speeds))
+        ]
+
+    def find_closest_track_point(self, timestamp_seconds: float, tolerance: float) -> Optional[TrackPoint]:
+        if timestamp_seconds < 0 or timestamp_seconds > self.duration():
             return None
-        
-        closest =  [p for p in self.points 
-                    if abs(p.elapsed_seconds - timestamp_seconds) < tolerance]
-        
+            
+        closest = [p for p in self.points 
+                  if abs(p.elapsed_seconds - timestamp_seconds) < tolerance]
         closest.sort(key=lambda p: abs(p.elapsed_seconds - timestamp_seconds))
-        
-        return closest[0] if len(closest) > 0 else None
+        return closest[0] if closest else None

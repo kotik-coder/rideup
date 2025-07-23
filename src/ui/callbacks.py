@@ -92,7 +92,6 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         return no_update
     
     def process_route_selection(selected_route_index, current_map_figure, map_dims):
-        print(map_dims)
         """
         Helper function to process route selection and generate UI components.
         """
@@ -101,7 +100,11 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         processed_route = spot.get_processed_route(route_processor, selected_route, selected_route_index)
 
         route_info_ui = create_route_info_card(selected_route, processed_route)
-        updated_map_figure = update_map_for_selected_route(current_map_figure, spot, selected_route, processed_route, map_dims)
+        route_profiles = spot.stats_collector.generate_route_profiles(
+            processed_route, 
+            [t for t in spot.tracks if t.route == selected_route]
+        )
+        updated_map_figure = update_map_for_selected_route(current_map_figure, spot, selected_route, processed_route, map_dims, route_profiles)
         add_checkpoints(updated_map_figure, processed_route)
 
         checkpoint_info_ui = html.Div()
@@ -221,20 +224,8 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         # Get the profiles from the route
         profiles = spot.stats_collector.generate_route_profiles(
             processed_route, 
-            selected_route, 
             [t for t in spot.tracks if t.route == selected_route]
         )
-        
-        # Prepare checkpoint data for the elevation profile
-        checkpoint_data = []
-        if processed_route.checkpoints:
-            checkpoint_data = [
-                {
-                    'distance_from_origin': cp.distance_from_origin,
-                    'index': i
-                }
-                for i, cp in enumerate(processed_route.checkpoints)
-            ]
         
         # Determine highlight distance if a checkpoint is selected
         highlight_distance = None
@@ -246,12 +237,12 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         
         # Create the figures
         elevation_fig = create_elevation_profile_figure(
-            profiles['elevation_profile'], 
+            profiles['static'], 
             highlight_distance
         )
         
         velocity_fig = create_velocity_profile_figure(
-            profiles['velocity_profile'], 
+            profiles['dynamic'], 
             highlight_distance
         )
         

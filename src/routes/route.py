@@ -11,6 +11,7 @@ class GeoPoint:
     lat: float
     lon: float
     elevation: float = 0.0
+    distance_from_origin: Optional[float] = 0.0
     
     def to_dict(self) -> dict:
         """Converts the GeoPoint object to a dictionary for serialization."""
@@ -19,7 +20,7 @@ class GeoPoint:
             'lon': self.lon,
             'elevation': self.elevation
         }
-
+    
     def distance_to(self, point: "GeoPoint"):
         R = 6371000 # Radius of Earth in meters
         

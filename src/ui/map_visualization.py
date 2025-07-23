@@ -7,6 +7,7 @@ from src.ui.map_helpers import bounds_to_zoom, print_step
 from src.routes.route import Route
 from src.routes.route_processor import ProcessedRoute
 from src.routes.spot import Spot
+from src.routes.statistics_collector import ElevationSegmentType, StaticProfilePoint
 
 intermediate_points_label = "Intermediate"
 checkpoints_label = "Checkpoint"
@@ -51,58 +52,76 @@ def hide_base_route(fig: go.Figure,
             trace.hoverinfo  = "name", 
             trace.showlegend = True                    
     
-def add_full_route_to_figure(fig: go.Figure,
-                       r : ProcessedRoute):
+def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, route_profiles: dict):
+    """Adds route visualization that contrasts with map features"""
+    # Visual properties designed to contrast with map colors
+    base_width = 8
+    highlight_width = 10
+    shadow_width = 14
+    shadow_color = "rgba(0, 0, 0, 0.4)"  # Darker shadow for better contrast
+    base_color = "rgba(255, 255, 255, 0.9)"  # Bright white base with high opacity
+    
+    # Color mapping using colors that contrast with typical map features
+    color_map = {
+        ElevationSegmentType.ASCENT: "rgba(230, 50, 50, 0.95)",       # Vivid red
+        ElevationSegmentType.DESCENT: "rgba(50, 100, 230, 0.95)",     # Deep blue
+        ElevationSegmentType.STEEP_ASCENT: "rgba(255, 0, 0, 1.0)",    # Pure red
+        ElevationSegmentType.STEEP_DESCENT: "rgba(0, 0, 255, 1.0)",   # Pure blue
+        ElevationSegmentType.ROLLER: "rgba(255, 165, 0, 0.95)",       # Orange
+        ElevationSegmentType.SWITCHBACK: "rgba(255, 215, 0, 1.0)"     # Bright gold
+    }
 
-    # Trace for all smooth points as non-selectable markers (intermediate points)
-    non_checkpoint_lons = []
-    non_checkpoint_lats = []
-    non_checkpoint_elevations = []
-    checkpoint_indices = {cp.route_point_index for cp in r.checkpoints}
+    # 1. Shadow effect - now more pronounced
+    fig.add_trace(go.Scattermap(
+        mode="lines",
+        lon=[p.lon for p in r.smooth_points],
+        lat=[p.lat for p in r.smooth_points],
+        line=dict(width=shadow_width, color=shadow_color),
+        hoverinfo="none",
+        showlegend=False
+    ))
 
-    for i, p in enumerate(r.smooth_points):
-        if i not in checkpoint_indices:
-            non_checkpoint_lons.append(p.lon)
-            non_checkpoint_lats.append(p.lat)
-            non_checkpoint_elevations.append(p.elevation)
+    # 2. Base route - now white with dark outline for maximum contrast
+    fig.add_trace(go.Scattermap(
+        mode="lines",
+        lon=[p.lon for p in r.smooth_points],
+        lat=[p.lat for p in r.smooth_points],
+        line=dict(
+            width=base_width, 
+            color=base_color,
+        ),
+        hoverinfo="none",
+        showlegend=False
+    ))
 
-    if non_checkpoint_lons:
-        fig.add_trace(go.Scattermap(
-            mode="markers",
-            lon=non_checkpoint_lons,
-            lat=non_checkpoint_lats,
-            marker=dict(
-                size=10,
-                color=non_checkpoint_elevations,
-                colorscale='hot',
-                opacity=1.0,  # Force full opacity
-                colorbar=dict(
-                    title='Высота (м)',
-                    x=0.01,  # Move more to the left
-                    y=0.85,   # Position above the graphs
-                    xanchor='left',
-                    yanchor='top',
-                    len=0.3,  # Make it shorter
-                    thickness=15,  # Make it narrower
-                    title_font=dict(
-                        size=12,
-                        color='black'
-                    ),
-                    tickfont=dict(
-                        size=10,
-                        color='black'
-                    ),
-                    bgcolor='rgba(255,255,255,0.5)',  # Semi-transparent white background
-                    outlinecolor='black',
-                    outlinewidth=1
+    # 3. Highlighted segments with strong contrasting colors
+    if 'segments' in route_profiles and route_profiles['segments']:
+        for segment in route_profiles['segments']:
+            if segment.segment_type not in color_map or segment.length < 50:
+                continue
+                
+            segment_points = r.smooth_points[segment.start_index:segment.end_index+1]
+            
+            fig.add_trace(go.Scattermap(
+                mode="lines",
+                lon=[p.lon for p in segment_points],
+                lat=[p.lat for p in segment_points],
+                line=dict(
+                    width=highlight_width,
+                    color=color_map[segment.segment_type],
                 ),
-            ),
-            hoverinfo="none",
-            showlegend=False,
-            name=intermediate_points_label,
-            selected=dict(marker=dict(opacity=1.0)),  # Disable selection effects
-            unselected=dict(marker=dict(opacity=1.0))
-        ))
+                hovertext=(
+                    f"{segment.segment_type.name}\n"
+                    f"Length: {segment.length:.0f}m\n"
+                    f"Avg Gradient: {segment.avg_gradient*100:.1f}%\n"
+                    f"Max Gradient: {segment.max_gradient*100:.1f}%"
+                ),
+                hoverinfo="text",
+                showlegend=False
+            ))
+
+    # 4. Checkpoints (topmost layer)
+    add_checkpoints(fig, r)
 
 def add_checkpoints(fig: go.Figure, r: ProcessedRoute):
     checkpoints = r.checkpoints
@@ -127,7 +146,7 @@ def add_checkpoints(fig: go.Figure, r: ProcessedRoute):
         lat=checkpoint_lats,
         marker=dict(
             size=12,
-            color='green',
+            color='black',
             opacity=0.5,
             symbol='circle',
         ),
@@ -246,7 +265,8 @@ def update_map_for_selected_route(current_map_figure: dict,
                                   spot: Spot,  
                                   route: Route,                                 
                                   processed_route: ProcessedRoute,
-                                  map_dims : Dict[str,int]) -> go.Figure:
+                                  map_dims : Dict[str,int],
+                                  profiles : List[StaticProfilePoint]) -> go.Figure:
     """
     Clears existing route traces and plots the fully processed route.
     Returns the updated figure.
@@ -273,7 +293,7 @@ def update_map_for_selected_route(current_map_figure: dict,
         # Fallback if dimensions aren't ready yet
         center_on_feature(fig, processed_route.bounds)
         
-    add_full_route_to_figure(fig, processed_route)
+    add_full_route_to_figure(fig, processed_route, profiles)
     
     print_step("Map Drawing", f"Карта обновлена для выбранного маршрута: {route.name}")
     return fig

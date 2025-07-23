@@ -1,8 +1,9 @@
 import plotly.graph_objects as go
 import numpy as np
 from typing import List, Optional
+from src.routes.track import TrackAnalysis
 
-from src.routes.statistics_collector import ProfilePoint
+from src.routes.statistics_collector import StaticProfilePoint
 
 def get_fill_polygons(distances, values, threshold_value):
     """
@@ -62,12 +63,12 @@ def calculate_velocity_quartiles(velocities):
     q3 = np.percentile(velocities_np, 75)
     return q1, median, q3
 
-def create_elevation_profile_figure(profile_points: List[ProfilePoint],
+def create_elevation_profile_figure(profile_points: List[StaticProfilePoint],
                                   highlight_distance: Optional[float] = None) -> go.Figure:
     """Create elevation profile visualization with enhanced styling."""
     fig = go.Figure()
     
-    distances = [p.distance for p in profile_points]
+    distances  = [p.distance_from_origin for p in profile_points]
     elevations = [p.elevation for p in profile_points]
     
     # Calculate mean elevation
@@ -184,13 +185,13 @@ def create_elevation_profile_figure(profile_points: List[ProfilePoint],
     )
     return fig
 
-def create_velocity_profile_figure(profile_points: List[ProfilePoint],
+def create_velocity_profile_figure(profile_points: List[TrackAnalysis],
                                  highlight_distance: Optional[float] = None) -> go.Figure:
     """Create velocity profile visualization with quartile-based coloring."""
     fig = go.Figure()
     
-    distances = [p.distance for p in profile_points]
-    velocities = [p.velocity * 3.6 if p.velocity else 0 for p in profile_points]  # Convert m/s to km/h
+    distances = [p.distance_from_start for p in profile_points]
+    velocities = [p.horizontal_speed * 3.6 for p in profile_points]  # Convert m/s to km/h
     
     # Calculate velocity quartiles
     q1, median, q3 = calculate_velocity_quartiles(velocities)
