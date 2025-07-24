@@ -65,61 +65,73 @@ def calculate_velocity_quartiles(velocities):
 
 def create_elevation_profile_figure(profile_points: List[StaticProfilePoint],
                                   highlight_distance: Optional[float] = None) -> go.Figure:
-    """Create elevation profile visualization with enhanced styling."""
+    """Create elevation profile with baseline and median reference."""
     fig = go.Figure()
     
-    distances  = [p.distance_from_origin for p in profile_points]
+    distances = [p.distance_from_origin for p in profile_points]
     elevations = [p.elevation for p in profile_points]
+    baselines = [p.baseline_elevation for p in profile_points if hasattr(p, 'baseline_elevation')]
+    has_baseline = len(baselines) == len(profile_points)
     
-    # Calculate mean elevation
-    mean_elevation = np.mean(elevations) if elevations else 0
+    # Calculate median elevation
+    median_elevation = np.median(elevations) if elevations else 0
     
-    # Get fill polygons for areas above and below mean
-    polygons_above, polygons_below = get_fill_polygons(distances, elevations, mean_elevation)
-    
-    # Add filled areas
-    for poly in polygons_above:
-        x_vals = [p[0] for p in poly]
-        y_vals = [p[1] for p in poly]
+    # Main elevation line
+    fig.add_trace(go.Scatter(
+        x=distances,
+        y=elevations,
+        mode='lines',
+        line=dict(
+            color='rgba(0, 100, 255, 1)',  # Solid blue
+            width=3,
+            shape='spline',
+            smoothing=1.3
+        ),
+        name='Elevation',
+        showlegend=True
+    ))
+
+    if has_baseline:
+        # Baseline line - subtle dashed
         fig.add_trace(go.Scatter(
-            x=x_vals,
-            y=y_vals,
-            fill='toself',
-            fillcolor='rgba(255, 100, 100, 0.2)',  # Pale red for above mean
-            line=dict(width=0),
-            hoverinfo='none',
-            showlegend=False,
-            mode='lines'
+            x=distances,
+            y=baselines,
+            mode='lines',
+            line=dict(
+                color='rgba(100, 100, 100, 0.8)',
+                width=1.5,
+                dash='dash',
+                shape='spline',
+                smoothing=1.3
+            ),
+            name='Baseline',
+            showlegend=True
         ))
-    
-    for poly in polygons_below:
-        x_vals = [p[0] for p in poly]
-        y_vals = [p[1] for p in poly]
+
+        # Unified fill between elevation and baseline
         fig.add_trace(go.Scatter(
-            x=x_vals,
-            y=y_vals,
+            x=distances + distances[::-1],
+            y=elevations + baselines[::-1],
             fill='toself',
-            fillcolor='rgba(100, 100, 255, 0.2)',  # Pale blue for below mean
+            fillcolor='rgba(100, 180, 255, 0.3)',  # Light blue
             line=dict(width=0),
-            hoverinfo='none',
-            showlegend=False,
-            mode='lines'
+            name='Oscillations',
+            showlegend=True
         ))
-    
-    # Add mean elevation line
+
+    # Median reference line
     fig.add_hline(
-        y=mean_elevation,
+        y=median_elevation,
         line=dict(
             color='rgba(100, 100, 100, 0.7)',
             width=1,
             dash='dot'
         ),
-        annotation_text=f"Mean: {mean_elevation:.1f}m",
-        annotation_position="bottom right",
-        annotation_font_size=10
+        annotation_text=f"Median: {median_elevation:.1f}m",
+        annotation_position="bottom right"
     )
-    
-    # Add shadow effect (wider, semi-transparent line behind main line)
+
+    # Shadow effect under main line
     fig.add_trace(go.Scatter(
         x=distances,
         y=elevations,
@@ -130,23 +142,6 @@ def create_elevation_profile_figure(profile_points: List[StaticProfilePoint],
             shape='spline',
             smoothing=1.3
         ),
-        hoverinfo='none',
-        showlegend=False
-    ))
-    
-    # Main elevation line
-    fig.add_trace(go.Scatter(
-        x=distances,
-        y=elevations,
-        mode='lines',
-        line=dict(
-            color='rgba(0, 100, 255, 1)',
-            width=3,
-            shape='spline',
-            smoothing=1.3
-        ),
-        hoverinfo='y+name',
-        name='Elevation',
         showlegend=False
     ))
 
@@ -161,7 +156,6 @@ def create_elevation_profile_figure(profile_points: List[StaticProfilePoint],
                 color='gold',
                 line=dict(width=2, color='black')
             ),
-            hoverinfo='none',
             showlegend=False
         ))
 
@@ -171,16 +165,12 @@ def create_elevation_profile_figure(profile_points: List[StaticProfilePoint],
         margin=dict(l=20, r=20, t=40, b=20),
         height=250,
         plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        xaxis=dict(
-            showgrid=True,
-            gridcolor='rgba(200, 200, 200, 0.2)',
-            linecolor='rgba(200, 200, 200, 0.8)'
-        ),
-        yaxis=dict(
-            showgrid=True,
-            gridcolor='rgba(200, 200, 200, 0.2)',
-            linecolor='rgba(200, 200, 200, 0.8)'
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
         )
     )
     return fig

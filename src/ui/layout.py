@@ -62,8 +62,8 @@ def setup_layout(spot: Spot):
                 'position': 'fixed',
                 'top': '20px',
                 'right': '20px',
-                'width': '30%',
-                'max-width': '400px',
+                'width': '35%',
+                'max-width': '600px',
                 'z-index': '1',
                 'overflow-y': 'auto',
                 'max-height': 'calc(100vh - 40px)'

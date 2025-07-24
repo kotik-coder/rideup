@@ -2,10 +2,11 @@
 from dataclasses import dataclass, field
 import numpy as np
 from scipy.integrate import quad
-from scipy.interpolate import Akima1DInterpolator, interp1d
+from scipy.interpolate import PchipInterpolator, interp1d
 from typing import Any, Dict, List, Tuple
+from scipy.signal import savgol_filter
 
-from src.ui.map_helpers import geodesic_integrand, print_step
+from src.ui.map_helpers import fft_lowpass_filter, geodesic_integrand, print_step
 from src.routes.route import GeoPoint, Route
 from src.routes.checkpoints import Checkpoint, CheckpointGenerator
 from src.routes.track import Track
@@ -23,32 +24,31 @@ class ProcessedRoute:
         self.bounds = []    
     
     def find_closest_route_point(self, point: GeoPoint) -> Tuple[int, GeoPoint]:
-
         index = min(
             range(len(self.smooth_points)),
             key=lambda i: self.smooth_points[i].distance_to(point)
         )
-        
         return index, self.smooth_points[index]
 
     def _create_smooth_route(self, route: Route):
+        """Creates a smoothed version of the route's points and elevations using
+        Savitzky-Golay filtering for elevations, and linear/Akima spline 
+        interpolation based on point density. Also calculates FFT baseline.
         """
-        Creates a smoothed version of the route's points and elevations using
-        linear or Akima spline interpolation based on point density.
-        """
-        MIN_POINTS_FOR_LINEAR   = 100  # Use linear if ≥ 100 points
-        MAX_DISTANCE_FOR_LINEAR = 15.0 # Use linear if avg spacing <15m
+        MIN_POINTS_FOR_LINEAR = 100  # Use linear if ≥ 100 points
+        MAX_DISTANCE_FOR_LINEAR = 15.0  # Use linear if avg spacing <15m
 
         points = route.points
 
+        # Calculate cumulative distances
         distances = np.zeros(len(points))
         for i in range(1, len(points)):
-            distances[i] = distances[i-1] + points[i-1].distance_to(points[i])        
-                
+            distances[i] = distances[i-1] + points[i-1].distance_to(points[i])
+        
         avg_distance = distances[-1] / (len(points) - 1)
         
         use_akima = (len(points) < MIN_POINTS_FOR_LINEAR) or \
-                     (avg_distance > MAX_DISTANCE_FOR_LINEAR)
+                (avg_distance > MAX_DISTANCE_FOR_LINEAR)
         
         method = "Akima" if use_akima else "linear"
         print_step("Smoothing", 
@@ -60,40 +60,69 @@ class ProcessedRoute:
                                 distances[-1] / MAX_DISTANCE_FOR_LINEAR))
         t_smooth = np.linspace(0, 1, num_smooth_points)
 
-        try:
-            lats = [p.lat for p in points]
-            lons = [p.lon for p in points]
-            
-            if use_akima:
-                interp_lat = Akima1DInterpolator(t, lats)
-                interp_lon = Akima1DInterpolator(t, lons)
-                interp_elev = Akima1DInterpolator(t, route.elevations)
-            else:
-                interp_lat = interp1d(t, lats, kind='linear')
-                interp_lon = interp1d(t, lons, kind='linear')
-                interp_elev = interp1d(t, route.elevations, kind='linear')
-
-            self.smooth_points = [
-                GeoPoint(lat, lon, elev)
-                for lat, lon, elev in zip(
-                    interp_lat(t_smooth),
-                    interp_lon(t_smooth),
-                    interp_elev(t_smooth)
-                )
-            ]
-
-            self.interpolators= {'lat' : interp_lat,
-                                 'lon' : interp_lon,
-                                 'ele' : interp_elev }
+        lats = [p.lat for p in points]
+        lons = [p.lon for p in points]
         
+        # Apply FFT low-pass filter to get baseline elevations
+        baseline_elev, cutoff_freq, dominant_freqs = fft_lowpass_filter(
+            route.elevations, distances
+        )
+        
+        print_step("FFT Analysis", 
+                f"Cutoff frequency: {cutoff_freq:.4f} cycles/meter "
+                f"(wavelength: {1/cutoff_freq:.1f}m)\n"
+                f"Dominant frequencies: {dominant_freqs[:3]} cycles/meter")
+        
+        # Calculate residual oscillations (original - baseline)
+        oscillations = route.elevations - baseline_elev
+        
+        # Apply Savitzky-Golay smoothing to residual oscillations
+        window_length = 10
+        polyorder = min(3, window_length - 1)  # Ensure polyorder < window_length
+        
+        try:
+            smoothed_oscillations = savgol_filter(oscillations, window_length, polyorder)
         except Exception as e:
-            print_step("Error", f"Smoothing failed for {route.name}: {str(e)}", level="ERROR")
-            return route.points.copy(), None, None, None
+            # Fallback to simple moving average if Savitzky-Golay fails
+            from scipy.ndimage import uniform_filter1d
+            window_size = max(3, window_length // 3)
+            smoothed_oscillations = uniform_filter1d(oscillations, size=window_size)
+            print_step("Warning", f"Savitzky-Golay failed, using moving average: {str(e)}", level="WARNING")
+        
+        # Combine baseline with smoothed oscillations
+        smoothed_elev = baseline_elev + smoothed_oscillations
+        
+        if use_akima:
+            interp_lat = PchipInterpolator(t, lats)
+            interp_lon = PchipInterpolator(t, lons)
+            interp_elev = PchipInterpolator(t, smoothed_elev)
+            interp_baseline = PchipInterpolator(t, baseline_elev)
+        else:
+            interp_lat = interp1d(t, lats, kind='linear')
+            interp_lon = interp1d(t, lons, kind='linear')
+            interp_elev = interp1d(t, smoothed_elev, kind='linear')
+            interp_baseline = interp1d(t, baseline_elev, kind='linear')
+
+        self.smooth_points = [
+            GeoPoint(lat, lon, elev)
+            for lat, lon, elev in zip(
+                interp_lat(t_smooth),
+                interp_lon(t_smooth),
+                interp_elev(t_smooth)
+            )
+        ]
+
+        self.interpolators = {
+            'lat': interp_lat,
+            'lon': interp_lon,
+            'ele': interp_elev,
+            'baseline': interp_baseline  # Store baseline interpolator
+        }        
         
     def calculate_precise_distances(self):
         """
         Calculates precise cumulative distances along the route using stored interpolators.
-        Handles both Akima and linear interpolation methods.
+        Handles both PChip and linear interpolation methods.
         """
         if not self.smooth_points or not self.interpolators.get('lat') or not self.interpolators.get('lon'):
             print_step("DistanceCalc", "Missing required data for distance calculation", level="WARNING")
@@ -105,7 +134,7 @@ class ProcessedRoute:
         
         # Create proper derivative functions based on interpolator type
         def create_derivative(interp):
-            if isinstance(interp, Akima1DInterpolator):
+            if isinstance(interp, PchipInterpolator):
                 return interp.derivative()
             else:
                 # For linear interpolation, we need to create a proper gradient function
@@ -159,7 +188,7 @@ class RouteProcessor:
 
         # Get tracks associated with this route
         associated_tracks = [t for t in self.all_tracks if t.route == route]        
-        processed_route = ProcessedRoute( route )                
+        processed_route = ProcessedRoute(route)                
         
         processed_route.checkpoints = self.checkpoint_generator.generate_checkpoints(
             processed_route.smooth_points,
@@ -174,4 +203,4 @@ class RouteProcessor:
         
         processed_route.bounds = [min(lons), min(lats), max(lons), max(lats)]                
 
-        return processed_route   
+        return processed_route

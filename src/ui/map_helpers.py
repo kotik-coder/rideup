@@ -1,7 +1,6 @@
 import math
 from pathlib import Path
 from typing import List
-
 from datetime import datetime
 
 import numpy as np 
@@ -19,6 +18,73 @@ WGS84_E2 = WGS84_F * (2 - WGS84_F)  # Square of first eccentricity
 TILE_SIZE = 512 # Pixel size of a single map tile. Common values are 256 or 512.
 EARTH_CIRCUMFERENCE = 40075016.686 # In meters
 DEGREES_PER_RADIAN = 180 / math.pi
+
+def fft_lowpass_filter(elevations, distances):
+    """
+    Optimized FFT filter with:
+    - Minimal smoothing just for peak detection
+    - Raw signal processing for reconstruction
+    - Physical frequency constraints
+    - Robust peak finding
+    """
+    from scipy.signal import find_peaks
+    from scipy.ndimage import uniform_filter1d
+    import numpy as np
+
+    # Input validation
+    if len(elevations) < 4 or len(distances) < 4:
+        return np.array(elevations), 0.01, np.array([0.01])
+
+    total_distance = distances[-1]
+    if total_distance <= 0:
+        return np.array(elevations), 0.01, np.array([0.01])
+
+    sampling_freq = len(distances) / total_distance
+    nyquist = sampling_freq / 2
+    
+    # Physical frequency bounds
+    max_freq = min(10/total_distance, nyquist/10)  # 1/(route_length/10) and 1/10th Nyquist
+    min_freq = max(1/total_distance, 0.001)       # 1/route_length with minimum
+
+    # Raw FFT processing
+    n_fft = len(elevations)
+    fft_vals = np.fft.fft(elevations, n=n_fft)
+    freqs = np.fft.fftfreq(n_fft, d=1/sampling_freq)
+
+    # Power spectrum (positive freqs)
+    pos_mask = freqs > 0
+    psd = np.abs(fft_vals[pos_mask])**2
+    psd_freqs = freqs[pos_mask]
+
+    # Minimal smoothing JUST for peak detection
+    smooth_psd = uniform_filter1d(psd, size=max(3, int(len(psd)/10)))
+
+    # Constrain to physical range
+    valid_mask = (psd_freqs >= min_freq) & (psd_freqs <= max_freq)
+    candidate_freqs = psd_freqs[valid_mask]
+    candidate_psd = smooth_psd[valid_mask]
+
+    # Find peaks with safe parameters
+    min_peak_distance = max(1, len(candidate_psd)//10)
+    if len(candidate_psd) > 3:
+        try:
+            peaks, _ = find_peaks(candidate_psd,
+                                height=np.median(candidate_psd),
+                                distance=min_peak_distance)
+            dominant_freqs = candidate_freqs[peaks]
+        except ValueError:
+            dominant_freqs = np.array([])
+    else:
+        dominant_freqs = np.array([])
+
+    # Determine cutoff
+    cutoff_freq = min(dominant_freqs.max(), max_freq) if len(dominant_freqs) > 0 else max_freq
+
+    # Apply filter to RAW signal
+    filter_mask = np.abs(freqs) <= cutoff_freq
+    baseline = np.real(np.fft.ifft(fft_vals * filter_mask))
+
+    return baseline, cutoff_freq, dominant_freqs
 
 def geodesic_integrand(t, interp_lat, interp_lon, dlat_dt, dlon_dt):
     """

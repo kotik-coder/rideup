@@ -1,7 +1,7 @@
 # track.py
 import numpy as np
 from scipy.signal import medfilt, savgol_filter
-from scipy.interpolate import Akima1DInterpolator
+from scipy.interpolate import PchipInterpolator
 from dataclasses import dataclass
 from typing import List, Optional
 from datetime import datetime
@@ -70,10 +70,10 @@ class Track:
     def _calculate_motion_components(self, times: np.ndarray, 
                                    distances: np.ndarray, 
                                    elevations: np.ndarray) -> tuple:
-        """Calculate horizontal and vertical motion using Akima interpolation"""
-        # Create Akima interpolators
-        dist_interp = Akima1DInterpolator(times, distances)
-        elev_interp = Akima1DInterpolator(times, elevations)
+        """Calculate horizontal and vertical motion using PChip interpolation"""
+        # Create PChip interpolators
+        dist_interp = PchipInterpolator(times, distances)
+        elev_interp = PchipInterpolator(times, elevations)
         
         # Calculate derivatives (velocities)
         h_speeds = dist_interp.derivative()(times)
