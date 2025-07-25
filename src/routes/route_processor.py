@@ -6,7 +6,7 @@ from scipy.interpolate import PchipInterpolator, interp1d
 from typing import Any, Dict, List, Tuple
 from scipy.signal import savgol_filter
 
-from src.ui.map_helpers import fft_lowpass_filter, geodesic_integrand, print_step
+from src.ui.map_helpers import calculate_baseline, calculate_sg_window_length, geodesic_integrand, print_step, resample_uniformly
 from src.routes.route import GeoPoint, Route
 from src.routes.checkpoints import Checkpoint, CheckpointGenerator
 from src.routes.track import Track
@@ -28,18 +28,18 @@ class ProcessedRoute:
             range(len(self.smooth_points)),
             key=lambda i: self.smooth_points[i].distance_to(point)
         )
-        return index, self.smooth_points[index]
+        return index, self.smooth_points[index]    
 
     def _create_smooth_route(self, route: Route):
         """Creates a smoothed version of the route's points and elevations using
-        Savitzky-Golay filtering for elevations, and linear/Akima spline 
-        interpolation based on point density. Also calculates FFT baseline.
+        Savitzky-Golay filtering for elevations, with PCHIP/Akima interpolation
+        where appropriate, while ensuring baseline is calculated on uniform samples.
         """
         MIN_POINTS_FOR_LINEAR = 100  # Use linear if ≥ 100 points
         MAX_DISTANCE_FOR_LINEAR = 15.0  # Use linear if avg spacing <15m
 
         points = route.points
-
+        
         # Calculate cumulative distances
         distances = np.zeros(len(points))
         for i in range(1, len(points)):
@@ -47,77 +47,78 @@ class ProcessedRoute:
         
         avg_distance = distances[-1] / (len(points) - 1)
         
-        use_akima = (len(points) < MIN_POINTS_FOR_LINEAR) or \
-                (avg_distance > MAX_DISTANCE_FOR_LINEAR)
+        use_splines = (len(points) < MIN_POINTS_FOR_LINEAR) or \
+                      (avg_distance > MAX_DISTANCE_FOR_LINEAR)
         
-        method = "Akima" if use_akima else "linear"
-        print_step("Smoothing", 
-                f"Route '{route.name}': {len(points)} points, "
-                f"avg spacing {avg_distance:.1f}m → {method} interpolation")
-
+        # First create uniformly resampled version for baseline calculation
+        uniform_distances, uniform_elevations, t_uniform = resample_uniformly(distances, 
+                                                                              route.elevations, 
+                                                                              MIN_POINTS_FOR_LINEAR, 
+                                                                              MAX_DISTANCE_FOR_LINEAR)
+        
+        # Calculate baseline on uniform samples
+        baseline_elev, dominant_freqs = calculate_baseline(uniform_elevations, uniform_distances)
+        
+        # Now process original points with selected interpolation method
         t = distances / distances[-1]
-        num_smooth_points = int(max(MIN_POINTS_FOR_LINEAR, 
-                                distances[-1] / MAX_DISTANCE_FOR_LINEAR))
-        t_smooth = np.linspace(0, 1, num_smooth_points)
-
         lats = [p.lat for p in points]
         lons = [p.lon for p in points]
         
-        # Apply FFT low-pass filter to get baseline elevations
-        baseline_elev, cutoff_freq, dominant_freqs = fft_lowpass_filter(
-            route.elevations, distances
+        # Calculate residuals on original points
+        interp_baseline = interp1d(
+            t_uniform, 
+            baseline_elev, 
+            kind='linear', 
+            fill_value='extrapolate'
         )
+        baseline_on_original = interp_baseline(t)
+        oscillations = route.elevations - baseline_on_original        
         
-        print_step("FFT Analysis", 
-                f"Cutoff frequency: {cutoff_freq:.4f} cycles/meter "
-                f"(wavelength: {1/cutoff_freq:.1f}m)\n"
-                f"Dominant frequencies: {dominant_freqs[:3]} cycles/meter")
-        
-        # Calculate residual oscillations (original - baseline)
-        oscillations = route.elevations - baseline_elev
-        
-        # Apply Savitzky-Golay smoothing to residual oscillations
-        window_length = 10
-        polyorder = min(3, window_length - 1)  # Ensure polyorder < window_length
-        
+        # Smooth oscillations
         try:
-            smoothed_oscillations = savgol_filter(oscillations, window_length, polyorder)
+            smoothed_oscillations = savgol_filter(
+                oscillations, 
+                window_length=calculate_sg_window_length(dominant_freqs, distances, oscillations), 
+                polyorder=3
+            )
         except Exception as e:
-            # Fallback to simple moving average if Savitzky-Golay fails
             from scipy.ndimage import uniform_filter1d
-            window_size = max(3, window_length // 3)
-            smoothed_oscillations = uniform_filter1d(oscillations, size=window_size)
-            print_step("Warning", f"Savitzky-Golay failed, using moving average: {str(e)}", level="WARNING")
+            smoothed_oscillations = uniform_filter1d(oscillations, size=3)
         
-        # Combine baseline with smoothed oscillations
-        smoothed_elev = baseline_elev + smoothed_oscillations
+        # Combine components
+        smoothed_elev = baseline_on_original + smoothed_oscillations
         
-        if use_akima:
+        # Create final interpolators (using original interpolation method choice)
+        if use_splines:
             interp_lat = PchipInterpolator(t, lats)
             interp_lon = PchipInterpolator(t, lons)
-            interp_elev = PchipInterpolator(t, smoothed_elev)
-            interp_baseline = PchipInterpolator(t, baseline_elev)
+            interp_ele = PchipInterpolator(t, smoothed_elev)
+            interp_baseline_final = PchipInterpolator(t, baseline_on_original)
         else:
             interp_lat = interp1d(t, lats, kind='linear')
             interp_lon = interp1d(t, lons, kind='linear')
-            interp_elev = interp1d(t, smoothed_elev, kind='linear')
-            interp_baseline = interp1d(t, baseline_elev, kind='linear')
-
+            interp_ele = interp1d(t, smoothed_elev, kind='linear')
+            interp_baseline_final = interp1d(t, baseline_on_original, kind='linear')
+        
+        # Generate smooth points (using original method's point count logic)
+        num_output_points = int(max(MIN_POINTS_FOR_LINEAR, distances[-1] / MAX_DISTANCE_FOR_LINEAR))
+        t_smooth = np.linspace(0, 1, num_output_points)
+        
         self.smooth_points = [
             GeoPoint(lat, lon, elev)
             for lat, lon, elev in zip(
                 interp_lat(t_smooth),
                 interp_lon(t_smooth),
-                interp_elev(t_smooth)
+                interp_ele(t_smooth)
             )
         ]
-
+        
         self.interpolators = {
             'lat': interp_lat,
             'lon': interp_lon,
-            'ele': interp_elev,
-            'baseline': interp_baseline  # Store baseline interpolator
-        }        
+            'ele': interp_ele,
+            'baseline': interp_baseline_final
+        }
         
     def calculate_precise_distances(self):
         """

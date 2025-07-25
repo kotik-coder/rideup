@@ -3,8 +3,13 @@ from pathlib import Path
 from typing import List
 from datetime import datetime
 
+from scipy.interpolate import interp1d
 from scipy.signal import find_peaks
 from scipy.ndimage import uniform_filter1d
+from scipy.sparse import diags
+from scipy.sparse.linalg import spsolve
+from scipy.optimize import golden
+from scipy.optimize import minimize_scalar
 
 import numpy as np 
 
@@ -22,35 +27,57 @@ TILE_SIZE = 512 # Pixel size of a single map tile. Common values are 256 or 512.
 EARTH_CIRCUMFERENCE = 40075016.686 # In meters
 DEGREES_PER_RADIAN = 180 / math.pi
 
-def fft_lowpass_filter(elevations, distances):
-    """
-    Enhanced baseline detection using:
-    - FFT for frequency analysis
-    - Asymmetric Least Squares (ALS) for constrained smoothing
-    - Physical frequency constraints
-    """
-    from scipy.sparse import diags, eye
-    from scipy.sparse.linalg import spsolve
-    import numpy as np
+def calculate_sg_window_length(dominant_freqs, distances, oscillations):
+    if len(dominant_freqs) > 0:
+        # Use the highest physically meaningful frequency
+        max_meaningful_freq = dominant_freqs[-1]  
+        min_wavelength = 1/max_meaningful_freq  # In meters
+        
+        # Convert wavelength to points
+        avg_point_spacing = distances[-1] / len(oscillations)
+        window_points = int(min_wavelength / avg_point_spacing)
+        
+        # Ensure odd and within bounds
+        window_length = max(5, min(window_points, len(oscillations)))
+        window_length = window_length + 1 if window_length % 2 == 0 else window_length
+        print(window_length)
+    else:
+        # Fallback to adaptive default
+        window_length = min(11, len(oscillations))
+        
+        return window_length
 
-    # Input validation
-    if len(elevations) < 4 or len(distances) < 4:
-        return np.array(elevations), 0.01, np.array([0.01])
+def resample_uniformly(x, y, min_points = 100, max_distance = 15.0):
+        
+    # First create uniformly resampled version for baseline calculation
+    num_uniform_points = int(max(min_points, x[-1] / max_distance))
+    t_uniform = np.linspace(0, 1, num_uniform_points)
+    
+    # Linear interpolation for uniform resampling (for baseline calculation only)
+    lin_interp = interp1d( x/x[-1], y, kind='linear' )
+    uniform_y = lin_interp(t_uniform)
+    uniform_x = t_uniform * x[-1]
+    
+    return uniform_x, uniform_y, t_uniform
 
-    total_distance = distances[-1]
-    if total_distance <= 0:
-        return np.array(elevations), 0.01, np.array([0.01])
-
-    # First perform FFT analysis to get frequency info (unchanged)
-    sampling_freq = len(distances) / total_distance
-    nyquist = sampling_freq / 2
-    max_freq = min(10/total_distance, nyquist/10)
-    min_freq = max(1/total_distance, 0.001)
-
-    n_fft = len(elevations)
-    fft_vals = np.fft.fft(elevations, n=n_fft)
-    freqs = np.fft.fftfreq(n_fft, d=1/sampling_freq)
-
+def verify_uniform_sampling(distances):
+    # --- Strict Uniform Sampling Check ---
+    distance_deltas = np.diff(distances)
+    uniform_threshold = 0.01  # 1% variation allowed
+    
+    if len(distance_deltas) > 0:  # Only check if we have deltas
+        mean_delta = distance_deltas.mean()
+        max_deviation = np.abs(distance_deltas - mean_delta).max()
+        
+        if max_deviation / mean_delta > uniform_threshold:
+            raise ValueError(
+                f"Input distances must be uniformly sampled. Found spacing varying by "
+                f"{max_deviation/mean_delta:.1%} (allowed: <{uniform_threshold:.0%}).\n"
+                f"Mean spacing: {mean_delta:.2f}m, Range: {distance_deltas.min():.2f}m "
+                f"to {distance_deltas.max():.2f}m"
+            )   
+            
+def identify_dominant_freqs(freqs, fft_vals, min_freq, max_freq):
     # Find dominant frequencies (same as before)
     pos_mask = freqs > 0
     psd = np.abs(fft_vals[pos_mask])**2
@@ -70,38 +97,127 @@ def fft_lowpass_filter(elevations, distances):
             dominant_freqs = np.array([])
     else:
         dominant_freqs = np.array([])
-    
-    cutoff_freq = min(dominant_freqs.max(), max_freq) if len(dominant_freqs) > 0 else max_freq
-
-    # Determine smoothness parameter based on cutoff frequency
-    # Higher cutoff → less smoothing (lower lambda)
-    lambda_ = 10 ** (4 - (cutoff_freq/min_freq)) if cutoff_freq > 0 else 1000
-
-    # ALS smoothing with endpoint constraints
-    def als_baseline(y, lam=100, p=0.01, n_iter=10):
-        """Asymmetric Least Squares baseline"""
-        L = len(y)
-        D = diags([1, -2, 1], [0, 1, 2], shape=(L-2, L))
-        w = np.ones(L)
         
-        # Force endpoints by giving them huge weights
+    return dominant_freqs
+
+# ALS smoothing with endpoint constraints
+def als_baseline(y, lam=100, p=0.01, n_iter=10):
+    """Asymmetric Least Squares baseline"""
+    L = len(y)
+    D = diags([1, -2, 1], [0, 1, 2], shape=(L-2, L))
+    w = np.ones(L)
+    
+    # Force endpoints by giving them huge weights
+    w[0] = w[-1] = 1e9
+    
+    for _ in range(n_iter):
+        W = diags(w)
+        Z = W + lam * D.T @ D
+        baseline = spsolve(Z, w * y)
+        w = p * (y > baseline) + (1 - p) * (y <= baseline)
+        
+        # Re-enforce endpoint weights
         w[0] = w[-1] = 1e9
         
-        for _ in range(n_iter):
-            W = diags(w)
-            Z = W + lam * D.T @ D
-            baseline = spsolve(Z, w * y)
-            w = p * (y > baseline) + (1 - p) * (y <= baseline)
-            
-            # Re-enforce endpoint weights
-            w[0] = w[-1] = 1e9
-            
-        return baseline
+    return baseline
 
-    # Get ALS baseline
-    baseline = als_baseline(elevations, lam=lambda_, p=0.04)
+# Step 3: Find optimal lambda in this range
+def optimize_als_params(elevations, lam_range=(1, 1e6), p_range=(0.001, 0.1)):
 
-    return baseline, cutoff_freq, dominant_freqs
+    # Cache to avoid redundant computations
+    param_cache = {}
+    
+    def evaluate_params(lam, p):
+        """Cached evaluation of parameter set"""
+        key = (round(lam,6), round(p,6))
+        if key not in param_cache:
+            bl = als_baseline(elevations, lam=lam, p=p)
+            # Combined quality metric (lower is better)
+            residual = np.median(np.abs(bl - elevations))  # Robust fit
+            smoothness = np.sum(np.diff(bl, 2)**2)       # 2nd derivative roughness
+            param_cache[key] = 0.7*smoothness + 0.3*residual
+        return param_cache[key]
+    
+    # Stage 1: Coarse grid search
+    lam_grid = np.logspace(np.log10(lam_range[0]), np.log10(lam_range[1]), 10)
+    p_grid = np.linspace(p_range[0], p_range[1], 5)
+    
+    best_score = float('inf')
+    best_lam, best_p = lam_range[0], p_range[0]
+    
+    for lam in lam_grid:
+        for p in p_grid:
+            current_score = evaluate_params(lam, p)
+            if current_score < best_score:
+                best_score = current_score
+                best_lam, best_p = lam, p
+    
+    # Stage 2: Fine optimization around best coarse result
+    def optimize_p(lam):
+        """Optimize p for a given lambda"""
+        res = minimize_scalar(
+            lambda p: evaluate_params(lam, p),
+            bounds=p_range,
+            method='bounded'
+        )
+        return res.x, res.fun
+    
+    # Optimize lambda with nested p optimization
+    final_result = minimize_scalar(
+        lambda lam: optimize_p(lam)[1],
+        bounds=(best_lam/10, best_lam*10),
+        method='bounded'
+    )
+    optimal_lam = final_result.x
+    optimal_p = optimize_p(optimal_lam)[0]
+    
+    return optimal_lam, optimal_p
+
+def calculate_baseline(elevations, distances):
+    """
+    Enhanced baseline detection using:
+    - FFT for frequency analysis
+    - Asymmetric Least Squares (ALS) for constrained smoothing
+    - Physical frequency constraints
+    """
+        
+    # Input validation
+    if len(elevations) < 4 or len(distances) < 4:
+        return np.array(elevations), 0.01, np.array([0.01])
+
+    total_distance = distances[-1]
+    
+    verify_uniform_sampling(distances)
+
+    # First perform FFT analysis to get frequency info 
+    sampling_freq = len(distances) / total_distance
+    nyquist = sampling_freq / 2
+    #bounds for peak detection in FFT power spectrum
+    max_freq = nyquist/2
+    min_freq = max(1/total_distance, 0.001)
+
+    n_fft = len(elevations)
+    fft_vals = np.fft.fft(elevations, n=n_fft)
+    freqs    = np.fft.fftfreq(n_fft, d=1/sampling_freq)
+
+    dominant_freqs = identify_dominant_freqs(freqs, fft_vals, min_freq, max_freq)    
+    cutoff_freq    = min(dominant_freqs.max(), max_freq) if len(dominant_freqs) > 0 else max_freq
+
+    # Step 1: Get initial lambda estimate from FFT
+    initial_lam = 10 ** (4 - (cutoff_freq/min_freq)) if cutoff_freq > 0 else 1000
+    
+    # Step 2: Define optimization neighborhood around initial estimate
+    lam_range = (
+        max(1,   initial_lam / 10),  # Lower bound
+        min(1e6, initial_lam * 10)   # Upper bound
+    )
+    
+    optimal_lam, optimal_p = optimize_als_params(elevations, lam_range)
+    
+    # Final baseline with optimized lambda
+    baseline = als_baseline(elevations, lam=optimal_lam, p=optimal_p)
+    
+    return baseline, dominant_freqs
 
 def geodesic_integrand(t, interp_lat, interp_lon, dlat_dt, dlon_dt):
     """
