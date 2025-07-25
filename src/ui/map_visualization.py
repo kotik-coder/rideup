@@ -32,10 +32,10 @@ def add_base_route_to_figure(fig: go.Figure,
         lon=[p.lon for p in points],
         lat=[p.lat for p in points],
         line=dict(width=5, color="grey"),  # Make line thicker for easier clicking
-        name = route.name,
+        name = f"Route - {route.name}",
         customdata=[route_index] * len(points),  # Add route index to each point
         hoverinfo="name",  # Only show text in hover
-        showlegend=True
+        showlegend=True,
     ))
     
 def hide_base_route(fig: go.Figure, 
@@ -43,16 +43,20 @@ def hide_base_route(fig: go.Figure,
                     route: Route):        
         
     for trace in fig.data:
-        if trace.name == route.name and trace.mode == "lines":
-            trace.line.color = "rgba(150, 150, 150, 0.3)"
-            trace.hoverinfo = "none"
-            trace.showlegend = False
-        elif trace.name != spot.name:
-            trace.line.color = "grey"
-            trace.hoverinfo  = "name", 
-            trace.showlegend = True                    
-    
-def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, route_profiles: dict):
+        if trace.name == route.name:
+            trace.visible = False
+        elif trace.name != spot.name:            
+            if trace.name and trace.name.startswith("Route -"):
+                trace.line.color = "grey"            
+                trace.line.width = 5
+                trace.hoverinfo  = "name"
+                trace.showlegend = True
+            else:
+                trace.visible = False
+                trace.showlegend = False
+                trace.hoverinfo = 'none'
+                
+def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, route_profiles: dict, route : Route):
     """
     Adds a performant, multi-layered route visualization to a Plotly figure.
     - Groups segments by type to reduce the number of traces and improve performance.
@@ -74,7 +78,8 @@ def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, route_profiles: 
         mode="lines",
         line=dict(width=shadow_width, color="rgba(0, 0, 0, 0.4)"),
         hoverinfo="none",
-        showlegend=False
+        showlegend=False,
+        name=f"shadow_{route.name}",
     ))
 
     # 2. White base route to sit on top of the shadow
@@ -84,7 +89,8 @@ def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, route_profiles: 
         mode="lines",
         line=dict(width=base_width, color="rgba(255, 255, 255, 0.9)"),
         hoverinfo="none",
-        showlegend=False
+        showlegend=False,
+        name=f"processed_{route.name}",
     ))
 
     # 3. Highlighted segments, refactored for performance
@@ -143,7 +149,7 @@ def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, route_profiles: 
                 hovertext=data['hovertext'],
                 hoverinfo="text",
                 name=seg_type.name.replace('_', ' ').title(),
-                legendgroup="segments"
+                legendgroup="segments",
             ))
 
     add_checkpoints(fig, r)
@@ -291,7 +297,7 @@ def update_map_for_selected_route(current_map_figure: dict,
                                   route: Route,                                 
                                   processed_route: ProcessedRoute,
                                   map_dims : Dict[str,int],
-                                  profiles : List[StaticProfilePoint]) -> go.Figure:
+                                  profiles : dict) -> go.Figure:
     """
     Clears existing route traces and plots the fully processed route.
     Returns the updated figure.
@@ -318,7 +324,7 @@ def update_map_for_selected_route(current_map_figure: dict,
         # Fallback if dimensions aren't ready yet
         center_on_feature(fig, processed_route.bounds)
         
-    add_full_route_to_figure(fig, processed_route, profiles)
+    add_full_route_to_figure(fig, processed_route, profiles, route)
     
     print_step("Map Drawing", f"Карта обновлена для выбранного маршрута: {route.name}")
     return fig

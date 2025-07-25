@@ -104,7 +104,12 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
             processed_route, 
             [t for t in spot.tracks if t.route == selected_route]
         )
-        updated_map_figure = update_map_for_selected_route(current_map_figure, spot, selected_route, processed_route, map_dims, route_profiles)
+        updated_map_figure = update_map_for_selected_route(current_map_figure, 
+                                                           spot, 
+                                                           selected_route, 
+                                                           processed_route, 
+                                                           map_dims, 
+                                                           route_profiles)
         add_checkpoints(updated_map_figure, processed_route)
 
         checkpoint_info_ui = html.Div()

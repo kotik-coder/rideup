@@ -57,7 +57,8 @@ class ProcessedRoute:
                                                                               MAX_DISTANCE_FOR_LINEAR)
         
         # Calculate baseline on uniform samples
-        baseline_elev, dominant_freqs = calculate_baseline(uniform_elevations, uniform_distances)
+        #baseline_elev, dominant_freqs = calculate_baseline_precise(uniform_elevations, uniform_distances)
+        baseline_elev = calculate_baseline(uniform_elevations)
         
         # Now process original points with selected interpolation method
         t = distances / distances[-1]
@@ -71,6 +72,7 @@ class ProcessedRoute:
             kind='linear', 
             fill_value='extrapolate'
         )
+        
         baseline_on_original = interp_baseline(t)
         oscillations = route.elevations - baseline_on_original        
         

@@ -40,7 +40,6 @@ def calculate_sg_window_length(dominant_freqs, distances, oscillations):
         # Ensure odd and within bounds
         window_length = max(5, min(window_points, len(oscillations)))
         window_length = window_length + 1 if window_length % 2 == 0 else window_length
-        print(window_length)
     else:
         # Fallback to adaptive default
         window_length = min(11, len(oscillations))
@@ -173,21 +172,8 @@ def optimize_als_params(elevations, lam_range=(1, 1e6), p_range=(0.001, 0.1)):
     
     return optimal_lam, optimal_p
 
-def calculate_baseline(elevations, distances):
-    """
-    Enhanced baseline detection using:
-    - FFT for frequency analysis
-    - Asymmetric Least Squares (ALS) for constrained smoothing
-    - Physical frequency constraints
-    """
-        
-    # Input validation
-    if len(elevations) < 4 or len(distances) < 4:
-        return np.array(elevations), 0.01, np.array([0.01])
-
+def calculate_baseline_precise(elevations, distances):
     total_distance = distances[-1]
-    
-    verify_uniform_sampling(distances)
 
     # First perform FFT analysis to get frequency info 
     sampling_freq = len(distances) / total_distance
@@ -215,11 +201,15 @@ def calculate_baseline(elevations, distances):
     optimal_lam, optimal_p = optimize_als_params(elevations, lam_range)
     
     # Final baseline with optimized lambda
-    baseline = als_baseline(elevations, lam=optimal_lam, p=optimal_p)
+    baseline = als_baseline(elevations, lam=optimal_lam, p=0.01)
     
     return baseline, dominant_freqs
 
-def geodesic_integrand(t, interp_lat, interp_lon, dlat_dt, dlon_dt):
+def calculate_baseline(elevations):
+    baseline = als_baseline(elevations, lam=1000, p=0.01)    
+    return baseline
+
+def geodesic_integrand(t, interp_lat, interp_lon, dlat_dt, dlon_dt):#
     """
     The function to be integrated to find the arc length.
     This corresponds to the ds/dt term in the mathematical explanation.
