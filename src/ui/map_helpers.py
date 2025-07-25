@@ -3,6 +3,9 @@ from pathlib import Path
 from typing import List
 from datetime import datetime
 
+from scipy.signal import find_peaks
+from scipy.ndimage import uniform_filter1d
+
 import numpy as np 
 
 CACHE_FILE = Path("elevation_cache.json")
@@ -21,14 +24,13 @@ DEGREES_PER_RADIAN = 180 / math.pi
 
 def fft_lowpass_filter(elevations, distances):
     """
-    Optimized FFT filter with:
-    - Minimal smoothing just for peak detection
-    - Raw signal processing for reconstruction
+    Enhanced baseline detection using:
+    - FFT for frequency analysis
+    - Asymmetric Least Squares (ALS) for constrained smoothing
     - Physical frequency constraints
-    - Robust peak finding
     """
-    from scipy.signal import find_peaks
-    from scipy.ndimage import uniform_filter1d
+    from scipy.sparse import diags, eye
+    from scipy.sparse.linalg import spsolve
     import numpy as np
 
     # Input validation
@@ -39,50 +41,65 @@ def fft_lowpass_filter(elevations, distances):
     if total_distance <= 0:
         return np.array(elevations), 0.01, np.array([0.01])
 
+    # First perform FFT analysis to get frequency info (unchanged)
     sampling_freq = len(distances) / total_distance
     nyquist = sampling_freq / 2
-    
-    # Physical frequency bounds
-    max_freq = min(10/total_distance, nyquist/10)  # 1/(route_length/10) and 1/10th Nyquist
-    min_freq = max(1/total_distance, 0.001)       # 1/route_length with minimum
+    max_freq = min(10/total_distance, nyquist/10)
+    min_freq = max(1/total_distance, 0.001)
 
-    # Raw FFT processing
     n_fft = len(elevations)
     fft_vals = np.fft.fft(elevations, n=n_fft)
     freqs = np.fft.fftfreq(n_fft, d=1/sampling_freq)
 
-    # Power spectrum (positive freqs)
+    # Find dominant frequencies (same as before)
     pos_mask = freqs > 0
     psd = np.abs(fft_vals[pos_mask])**2
     psd_freqs = freqs[pos_mask]
-
-    # Minimal smoothing JUST for peak detection
     smooth_psd = uniform_filter1d(psd, size=max(3, int(len(psd)/10)))
-
-    # Constrain to physical range
     valid_mask = (psd_freqs >= min_freq) & (psd_freqs <= max_freq)
     candidate_freqs = psd_freqs[valid_mask]
     candidate_psd = smooth_psd[valid_mask]
-
-    # Find peaks with safe parameters
-    min_peak_distance = max(1, len(candidate_psd)//10)
+    
     if len(candidate_psd) > 3:
         try:
             peaks, _ = find_peaks(candidate_psd,
                                 height=np.median(candidate_psd),
-                                distance=min_peak_distance)
+                                distance=max(1, len(candidate_psd)//10))
             dominant_freqs = candidate_freqs[peaks]
         except ValueError:
             dominant_freqs = np.array([])
     else:
         dominant_freqs = np.array([])
-
-    # Determine cutoff
+    
     cutoff_freq = min(dominant_freqs.max(), max_freq) if len(dominant_freqs) > 0 else max_freq
 
-    # Apply filter to RAW signal
-    filter_mask = np.abs(freqs) <= cutoff_freq
-    baseline = np.real(np.fft.ifft(fft_vals * filter_mask))
+    # Determine smoothness parameter based on cutoff frequency
+    # Higher cutoff → less smoothing (lower lambda)
+    lambda_ = 10 ** (4 - (cutoff_freq/min_freq)) if cutoff_freq > 0 else 1000
+
+    # ALS smoothing with endpoint constraints
+    def als_baseline(y, lam=100, p=0.01, n_iter=10):
+        """Asymmetric Least Squares baseline"""
+        L = len(y)
+        D = diags([1, -2, 1], [0, 1, 2], shape=(L-2, L))
+        w = np.ones(L)
+        
+        # Force endpoints by giving them huge weights
+        w[0] = w[-1] = 1e9
+        
+        for _ in range(n_iter):
+            W = diags(w)
+            Z = W + lam * D.T @ D
+            baseline = spsolve(Z, w * y)
+            w = p * (y > baseline) + (1 - p) * (y <= baseline)
+            
+            # Re-enforce endpoint weights
+            w[0] = w[-1] = 1e9
+            
+        return baseline
+
+    # Get ALS baseline
+    baseline = als_baseline(elevations, lam=lambda_, p=0.04)
 
     return baseline, cutoff_freq, dominant_freqs
 
