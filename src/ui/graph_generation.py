@@ -68,9 +68,9 @@ def create_elevation_profile_figure(profile_points: List[StaticProfilePoint],
     """Create elevation profile with baseline and median reference."""
     fig = go.Figure()
     
-    distances = [p.distance_from_origin for p in profile_points]
-    elevations = [p.elevation for p in profile_points]
-    baselines = [p.baseline_elevation for p in profile_points if hasattr(p, 'baseline_elevation')]
+    distances    = [p.distance_from_origin for p in profile_points]
+    elevations   = [p.elevation for p in profile_points]
+    baselines    = [p.elevation_baseline for p in profile_points]
     has_baseline = len(baselines) == len(profile_points)
     
     # Calculate median elevation
@@ -165,12 +165,23 @@ def create_elevation_profile_figure(profile_points: List[StaticProfilePoint],
         margin=dict(l=20, r=20, t=40, b=20),
         height=250,
         plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',  # Added this line for transparency
         legend=dict(
             orientation="h",
             yanchor="bottom",
             y=1.02,
             xanchor="right",
             x=1
+        ),
+        xaxis=dict(
+            showgrid=True,
+            gridcolor='rgba(200, 200, 200, 0.2)',
+            linecolor='rgba(200, 200, 200, 0.8)'
+        ),
+        yaxis=dict(
+            showgrid=True,
+            gridcolor='rgba(200, 200, 200, 0.2)',
+            linecolor='rgba(200, 200, 200, 0.8)'
         )
     )
     return fig

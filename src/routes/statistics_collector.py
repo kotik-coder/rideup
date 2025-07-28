@@ -2,8 +2,6 @@ from enum import Enum, auto
 from typing import Any, List, Dict, Optional
 import numpy as np
 
-from scipy.signal import find_peaks, savgol_filter
-
 from src.routes.route_processor import ProcessedRoute
 from src.routes.route import GeoPoint
 from src.routes.track import Track, TrackAnalysis
@@ -11,6 +9,7 @@ from src.ui.map_helpers import print_step
 
 MIN_SEGMENT_LENGTH = 50  # meters (minimum length for a meaningful segment)
 MIN_STEEP_LENGTH = 10    # meters (allow shorter segments for very steep sections)
+ROLLER_THRESHOLD = 3     # number of oscillations to qualify as roller section
 
 class ElevationSegmentType(Enum):
     ASCENT = auto()
@@ -64,41 +63,29 @@ class RouteDifficulty(Enum):
     BLACK = auto()      # Difficult
     DOUBLE_BLACK = auto() # Expert
 
-class StaticProfilePoint(GeoPoint):
-    """Enhanced GeoPoint with gradient, segment data, and baseline elevation"""
+class StaticProfilePoint(GeoPoint):    
+    
+    """Enhanced GeoPoint with gradient and segment data"""
     def __init__(self, lat: float, lon: float, elevation: float, 
-                 distance_from_origin: float, gradient: Optional[float] = None,
-                 segment_type: Optional[ElevationSegmentType] = None,
-                 baseline_elevation: Optional[float] = None):
+                 elevation_baseline : float, distance_from_origin: float, gradient: Optional[float] = None,
+                 segment_type: Optional[ElevationSegmentType] = None):
         super().__init__(lat, lon, elevation, distance_from_origin)
         self.gradient = gradient
         self.segment_type = segment_type
-        self.baseline_elevation = baseline_elevation
-        self.oscillation = (elevation - baseline_elevation) if baseline_elevation is not None else None
+        self.elevation_baseline = elevation_baseline
 
     def to_dict(self) -> dict:
         base = super().to_dict()
         base.update({
             'gradient': self.gradient,
-            'segment_type': self.segment_type.name if self.segment_type else None,
-            'baseline_elevation': self.baseline_elevation,
-            'oscillation': self.oscillation
+            'segment_type': self.segment_type.name if self.segment_type else None
         })
         return base
 
 class StatisticsCollector:
     def __init__(self):
         self._gradient_window = 3
-        # --- New Parameters for Roller Detection ---
-        self.ROLLER_BASELINE_WINDOW_LENGTH = 51  # Window length for Savitzky-Golay filter (must be odd)
-        self.ROLLER_BASELINE_POLYORDER = 3       # Polynomial order for Savitzky-Golay filter
-        self.ROLLER_MIN_OSCILLATIONS = 3         # Minimum number of peaks/valleys to qualify as roller
-        self.ROLLER_MIN_LENGTH = 30              # Minimum length (meters) for a roller section
-        self.ROLLER_MAX_LENGTH = 500             # Maximum length (meters) for a roller section
-        self.ROLLER_MIN_AMPLITUDE = 2.0          # Minimum average peak-to-peak amplitude (meters)
-        # --- End New Parameters ---
         print_step("StatisticsCollector", "Initialized with ProcessedRoute integration")
-
 
     def generate_route_profiles(self, 
                              proute: ProcessedRoute,
@@ -115,16 +102,8 @@ class StatisticsCollector:
 
     def _create_static_profile(self, proute: ProcessedRoute) -> List[StaticProfilePoint]:
         t_values = np.linspace(0, 1, len(proute.smooth_points))
-        
-        # Get elevation and baseline interpolators
         elev_interp = proute.interpolators['ele']
-        baseline_interp = proute.interpolators.get('baseline')
         
-        # Calculate elevations and baseline
-        elevations = elev_interp(t_values)
-        baseline = baseline_interp(t_values) if baseline_interp else None
-        
-        # Calculate gradients
         if hasattr(elev_interp, 'derivative'):
             points = proute.smooth_points
             gradients = np.zeros_like(points)
@@ -133,14 +112,14 @@ class StatisticsCollector:
                 Δdist = points[i].distance_from_origin - points[i-1].distance_from_origin
                 gradients[i] = Δelev / Δdist if Δdist > 0 else 0
         else:
+            elevations = elev_interp(t_values)
             distances = [p.distance_from_origin for p in proute.smooth_points]
             gradients = np.gradient(elevations, distances)
 
         return [
             StaticProfilePoint(
-                p.lat, p.lon, p.elevation, p.distance_from_origin,
-                gradient=float(gradients[i]),
-                baseline_elevation=float(baseline[i]) if baseline is not None else None
+                p.lat, p.lon, p.elevation, proute.baseline.points[i], p.distance_from_origin,
+                gradient=float(gradients[i])
             )
             for i, p in enumerate(proute.smooth_points)
         ]
@@ -186,66 +165,57 @@ class StatisticsCollector:
         if not segments:
             return []
 
-        # Merge segments (keep your fixed logic)
+        # 1. Merge similar adjacent segments
         merged_segments = [segments[0]]
         for current in segments[1:]:
             last = merged_segments[-1]
-            if (current.segment_type == last.segment_type or 
+            
+            if (current.segment_type == last.segment_type or
                 self._is_transitional(last.segment_type, current.segment_type)):
+                
+                # *** FIX START ***
+                # The original code passed lists to the ElevationSegment constructor,
+                # which expects float values, causing a nested-list bug.
+                # The fix is to initialize a new segment correctly using the first
+                # data point, then overwrite its lists with the merged data.
+
+                # Initialize a new segment with the starting point of the 'last' segment.
                 merged = ElevationSegment(
                     start_idx=last.start_index,
                     seg_type=last.segment_type,
                     gradient=last.gradients[0],
                     distance=last.distances[0]
                 )
+
+                # Overwrite the lists with the combined data from 'last' and 'current' segments.
                 merged.gradients = last.gradients + current.gradients
                 merged.distances = last.distances + current.distances
                 merged.end_index = current.end_index
+                
+                # Replace the 'last' segment in the list with the new 'merged' segment.
                 merged_segments[-1] = merged
+                # *** FIX END ***
             else:
                 merged_segments.append(current)
 
-        # Extract profile points for oscillation analysis
-        profile_points = []
+        # 2. Identify roller sections
+        final_segments = []
+        roller_candidate = []
+        
         for seg in merged_segments:
-            for i in range(len(seg.gradients)):
-                profile_points.append(
-                    StaticProfilePoint(
-                        lat=0, lon=0,  # Placeholder (values unused)
-                        elevation=seg.gradients[i],  # Mock elevation
-                        distance_from_origin=seg.distances[i],
-                        gradient=seg.gradients[i]
-                    )
-                )
-
-        # Detect oscillations
-        sign_changes = self._find_gradient_sign_changes(profile_points)
-        oscillations = self._group_oscillations(profile_points, sign_changes)
-
-        # Identify valid rollers (adjust thresholds as needed)
-        roller_segments = []
-        for osc in oscillations:
-            if 5 <= osc["length"] <= 100 and abs(osc["avg_gradient"]) >= 0.05:
-                roller_segments.append(
-                    ElevationSegment(
-                        start_idx=osc["start_idx"],
-                        seg_type=ElevationSegmentType.ROLLER,
-                        gradient=osc["avg_gradient"],
-                        distance=profile_points[osc["start_idx"]].distance_from_origin
-                    )
-                )
-
-        # Combine rollers with non-roller segments
-        final_segments = [s for s in merged_segments if not self._is_roller_candidate(s)]
-        final_segments.extend(roller_segments)
-        return sorted(final_segments, key=lambda x: x.start_index)
-
-    def _is_roller_candidate(self, segment: ElevationSegment) -> bool:
-        """Check if a segment is short enough to be part of a roller."""
-        return segment.length() < 100 and segment.segment_type in (
-            ElevationSegmentType.ASCENT, 
-            ElevationSegmentType.DESCENT
-        )
+            if (seg.length() < 100 and 
+                seg.segment_type in (ElevationSegmentType.ASCENT, ElevationSegmentType.DESCENT)):
+                roller_candidate.append(seg)
+            else:
+                if len(roller_candidate) >= ROLLER_THRESHOLD:
+                    final_segments.append(self._create_roller_segment(roller_candidate))
+                roller_candidate = []
+                final_segments.append(seg)
+        
+        if len(roller_candidate) >= ROLLER_THRESHOLD:
+            final_segments.append(self._create_roller_segment(roller_candidate))
+        
+        return final_segments
 
     def _create_roller_segment(self, segments: List[ElevationSegment]) -> ElevationSegment:
         """Combine multiple short ascent/descent segments into one roller segment"""
@@ -322,31 +292,3 @@ class StatisticsCollector:
         if gradient > 0.01: return ElevationSegmentType.ASCENT
         if gradient < -0.01: return ElevationSegmentType.DESCENT
         return ElevationSegmentType.FLAT
-    
-    def _find_gradient_sign_changes(self, profile: List[StaticProfilePoint]) -> List[int]:
-        """Detect indices where gradient changes sign (ascend <-> descend)."""
-        sign_changes = []
-        for i in range(1, len(profile)):
-            if profile[i].gradient is None or profile[i-1].gradient is None:
-                continue
-            if (profile[i].gradient * profile[i-1].gradient) < 0:  # Sign change
-                sign_changes.append(i)
-        return sign_changes
-
-    def _group_oscillations(self, profile: List[StaticProfilePoint], sign_changes: List[int]) -> List[Dict[str, Any]]:
-        """Group sign changes into candidate roller sections."""
-        oscillations = []
-        for i in range(len(sign_changes) - 1):
-            start_idx = sign_changes[i]
-            end_idx = sign_changes[i + 1]
-            length = profile[end_idx].distance_from_origin - profile[start_idx].distance_from_origin
-            avg_gradient = np.mean([p.gradient for p in profile[start_idx:end_idx] if p.gradient is not None])
-            
-            oscillations.append({
-                "start_idx": start_idx,
-                "end_idx": end_idx,
-                "length": length,
-                "avg_gradient": avg_gradient,
-            })
-            
-        return oscillations

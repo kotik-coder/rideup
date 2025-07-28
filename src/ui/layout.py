@@ -107,6 +107,7 @@ def setup_layout(spot: Spot):
         dcc.Store(id='selected-route-index'),
         dcc.Store(id='selected-checkpoint-index'),  
         dcc.Store(id='map-dimensions-store'),
+        dcc.Store(id='initial-state-trigger', data=True),  
         html.Div(id='initial-load-trigger', style={'display': 'none'})
     ], 
     fluid=True, 

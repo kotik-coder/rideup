@@ -6,17 +6,20 @@ from scipy.interpolate import PchipInterpolator, interp1d
 from typing import Any, Dict, List, Tuple
 from scipy.signal import savgol_filter
 
-from src.ui.map_helpers import calculate_baseline, calculate_sg_window_length, geodesic_integrand, print_step, resample_uniformly
+from src.routes.route_helpers import calculate_sg_window_length, geodesic_integrand, resample_uniformly
+from src.routes. baseline import Baseline
 from src.routes.route import GeoPoint, Route
 from src.routes.checkpoints import Checkpoint, CheckpointGenerator
 from src.routes.track import Track
 from src.iio.spot_photo import SpotPhoto
+from src.ui.map_helpers import print_step
 
 class ProcessedRoute:
     smooth_points: List[GeoPoint]
     checkpoints: List[Checkpoint]
     bounds: List[float]
     interpolators: Dict[str, Any]
+    baseline : Baseline
         
     def __init__(self, route : Route):
         self._create_smooth_route(route)
@@ -58,7 +61,7 @@ class ProcessedRoute:
         
         # Calculate baseline on uniform samples
         #baseline_elev, dominant_freqs = calculate_baseline_precise(uniform_elevations, uniform_distances)
-        baseline_elev = calculate_baseline(uniform_elevations)
+        self.baseline = Baseline(uniform_elevations, uniform_distances)
         
         # Now process original points with selected interpolation method
         t = distances / distances[-1]
@@ -68,7 +71,7 @@ class ProcessedRoute:
         # Calculate residuals on original points
         interp_baseline = interp1d(
             t_uniform, 
-            baseline_elev, 
+            self.baseline.points, 
             kind='linear', 
             fill_value='extrapolate'
         )
@@ -80,7 +83,7 @@ class ProcessedRoute:
         try:
             smoothed_oscillations = savgol_filter(
                 oscillations, 
-                window_length=calculate_sg_window_length(dominant_freqs, distances, oscillations), 
+                window_length=calculate_sg_window_length(self.baseline.freqs, distances, oscillations), 
                 polyorder=3
             )
         except Exception as e:

@@ -1,5 +1,6 @@
 # callbacks.py
 from dash import ClientsideFunction, Input, Output, State, callback_context, no_update, html
+import dash
 
 from src.ui.map_helpers import print_step
 from src.ui.map_visualization import *
@@ -212,35 +213,59 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         Output('velocity-profile', 'figure'),
         Input('selected-route-index', 'data'),
         Input('selected-checkpoint-index', 'data'),
+        Input('initial-state-trigger', 'data'),  # Add this input
         State('selected-route-index', 'data'),
-        prevent_initial_call=True
+        prevent_initial_call=False  # Change to False to allow initial call
     )
-    def update_profile_graphs(route_trigger, cp_trigger, selected_route_index):
+    def update_profile_graphs(route_trigger, cp_trigger, initial_trigger, selected_route_index):
         """
-        Updates elevation and velocity profile graphs when a route is selected or checkpoint changes.
+        Updates elevation and velocity profile graphs, handling initial state.
         """
-        if selected_route_index is None:
-            return go.Figure(), go.Figure()
+        ctx = dash.callback_context
         
-        # Get the current route and processed route
+        # Check if this is the initial call
+        if not ctx.triggered or ctx.triggered[0]['prop_id'] == 'initial-state-trigger.data':
+            # Return empty figures with transparent background
+            empty_fig = go.Figure()
+            empty_fig.update_layout(
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                xaxis=dict(visible=False),
+                yaxis=dict(visible=False),
+                height=250,
+                margin=dict(l=20, r=20, t=40, b=20)
+            )
+            return empty_fig, empty_fig
+        
+        if selected_route_index is None:
+            # Same empty figures as above
+            empty_fig = go.Figure()
+            empty_fig.update_layout(
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                xaxis=dict(visible=False),
+                yaxis=dict(visible=False),
+                height=250,
+                margin=dict(l=20, r=20, t=40, b=20)
+            )
+            return empty_fig, empty_fig
+        
+        # Rest of your existing callback logic...
         selected_route = spot.routes[selected_route_index]
         processed_route = spot.get_processed_route(route_processor, selected_route, selected_route_index)
         
-        # Get the profiles from the route
         profiles = spot.stats_collector.generate_route_profiles(
             processed_route, 
             [t for t in spot.tracks if t.route == selected_route]
         )
         
-        # Determine highlight distance if a checkpoint is selected
         highlight_distance = None
-        if cp_trigger is not None \
-            and processed_route.checkpoints \
-            and cp_trigger < len(processed_route.checkpoints):            
-                
+        if (cp_trigger is not None 
+            and processed_route.checkpoints 
+            and cp_trigger < len(processed_route.checkpoints)):
+            
             highlight_distance = processed_route.checkpoints[cp_trigger].distance_from_origin
         
-        # Create the figures
         elevation_fig = create_elevation_profile_figure(
             profiles['static'], 
             highlight_distance
