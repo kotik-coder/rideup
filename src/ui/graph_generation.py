@@ -1,9 +1,9 @@
 import plotly.graph_objects as go
 import numpy as np
 from typing import List, Optional
+from src.routes.baseline import Baseline
+from src.routes.profile_analyzer import StaticProfile
 from src.routes.track import TrackAnalysis
-
-from src.routes.statistics_collector import StaticProfilePoint
 
 def get_fill_polygons(distances, values, threshold_value):
     """
@@ -63,15 +63,17 @@ def calculate_velocity_quartiles(velocities):
     q3 = np.percentile(velocities_np, 75)
     return q1, median, q3
 
-def create_elevation_profile_figure(profile_points: List[StaticProfilePoint],
+def create_elevation_profile_figure(profile : StaticProfile,
+                                    baseline : Baseline,
                                   highlight_distance: Optional[float] = None) -> go.Figure:
     """Create elevation profile with baseline and median reference."""
     fig = go.Figure()
     
-    distances    = [p.distance_from_origin for p in profile_points]
-    elevations   = [p.elevation for p in profile_points]
-    baselines    = [p.elevation_baseline for p in profile_points]
-    has_baseline = len(baselines) == len(profile_points)
+    distances = [p.distance_from_origin for p in profile.points]
+    elevations   = [p.elevation for p in profile.points]
+    baselines    = profile.get_baseline(baseline)
+    
+    has_baseline = len(baselines) == len(profile.points)    
     
     # Calculate median elevation
     median_elevation = np.median(elevations) if elevations else 0
@@ -110,8 +112,8 @@ def create_elevation_profile_figure(profile_points: List[StaticProfilePoint],
 
         # Unified fill between elevation and baseline
         fig.add_trace(go.Scatter(
-            x=distances + distances[::-1],
-            y=elevations + baselines[::-1],
+            x=np.concatenate([distances, distances[::-1]]),  # Forward then backward
+            y=np.concatenate([elevations, baselines[::-1]]),  # Elevation forward, baseline backward
             fill='toself',
             fillcolor='rgba(100, 180, 255, 0.3)',  # Light blue
             line=dict(width=0),

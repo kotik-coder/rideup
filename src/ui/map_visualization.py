@@ -7,7 +7,7 @@ from src.ui.map_helpers import bounds_to_zoom, print_step
 from src.routes.route import Route
 from src.routes.route_processor import ProcessedRoute
 from src.routes.spot import Spot
-from src.routes.statistics_collector import ElevationSegmentType, StaticProfilePoint
+from src.routes.statistics_collector import GradientSegmentType, TrailFeatureType
 
 intermediate_points_label = "Intermediate"
 checkpoints_label = "Checkpoint"
@@ -95,30 +95,37 @@ def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, route_profiles: 
 
     # 3. Highlighted segments, refactored for performance
     if 'segments' in route_profiles and route_profiles['segments']:
+        
+        segment_profile = route_profiles['segments']
+        
         color_map = {
-            ElevationSegmentType.ASCENT: "rgba(230, 50, 50, 0.95)",
-            ElevationSegmentType.DESCENT: "rgba(50, 100, 230, 0.95)",
-            ElevationSegmentType.STEEP_ASCENT: "rgba(255, 0, 0, 1.0)",
-            ElevationSegmentType.STEEP_DESCENT: "rgba(0, 0, 255, 1.0)",
-            ElevationSegmentType.ROLLER: "rgba(255, 165, 0, 0.95)",
-            ElevationSegmentType.SWITCHBACK: "rgba(255, 215, 0, 1.0)"
+            GradientSegmentType.ASCENT: "rgba(230, 50, 50, 0.95)",
+            GradientSegmentType.DESCENT: "rgba(50, 100, 230, 0.95)",
+            GradientSegmentType.STEEP_ASCENT: "rgba(255, 0, 0, 1.0)",
+            GradientSegmentType.STEEP_DESCENT: "rgba(0, 0, 255, 1.0)",
+            TrailFeatureType.ROLLER: "rgba(255, 165, 0, 0.95)",
+            TrailFeatureType.SWITCHBACK: "rgba(255, 215, 0, 1.0)"
         }
         
         # Group all points and hover data by their segment type
         traces_data = {}
-        for segment in route_profiles['segments']:
+        for segment in segment_profile.segments:
             # Access segment_type, start_index, end_index, length, and gradients as dictionary keys
             # The seg_type from the dictionary will be the string name of the enum, e.g., "ASCENT"
-            seg_type_str = segment['segment_type'] 
-            # Convert string back to ElevationSegmentType enum member for the color_map lookup
-            seg_type = ElevationSegmentType[seg_type_str] 
+            seg_type     = segment.gradient_type
+            seg_type_ftr = segment.feature_type
             
-            start_index = segment['start_index']
-            end_index = segment['end_index']
-            segment_length = segment['length']
+            seg_type = [ seg_type, seg_type_ftr]
+            
+            start_index    = segment.start_index
+            end_index      = segment.end_index
+            segment_length = segment.length()
 
-            if seg_type not in color_map or segment_length < 50:
+            existing_keys = [key for key in seg_type if key in color_map]
+            if not existing_keys:
                 continue
+            
+            seg_type = existing_keys[0]
 
             if seg_type not in traces_data:
                 traces_data[seg_type] = {"lon": [], "lat": [], "hovertext": []}
@@ -127,8 +134,8 @@ def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, route_profiles: 
             hover_info = (
                 f"<b>{seg_type.name.replace('_', ' ').title()}</b><br>"
                 f"Length: {segment_length:.0f} m<br>"
-                f"Avg Grade: {segment['avg_gradient'] * 100:.1f} % <br>"
-                f"Max Grade: {segment['max_gradient'] * 100:.1f} %"
+                f"Avg Grade: {segment.avg_gradient() * 100:.1f} % <br>"
+                f"Max Grade: {segment.max_gradient() * 100:.1f} %"
             )
             
             for p in segment_points:

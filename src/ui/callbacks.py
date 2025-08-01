@@ -251,7 +251,7 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
             return empty_fig, empty_fig
         
         # Rest of your existing callback logic...
-        selected_route = spot.routes[selected_route_index]
+        selected_route  = spot.routes[selected_route_index]
         processed_route = spot.get_processed_route(route_processor, selected_route, selected_route_index)
         
         profiles = spot.stats_collector.generate_route_profiles(
@@ -268,6 +268,7 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         
         elevation_fig = create_elevation_profile_figure(
             profiles['static'], 
+            processed_route.baseline,
             highlight_distance
         )
         

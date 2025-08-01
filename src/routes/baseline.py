@@ -1,15 +1,18 @@
-from typing import List, Optional
+from typing import Any, List, Optional
 from scipy.signal import find_peaks
 from scipy.ndimage import uniform_filter1d
 from scipy.sparse import diags
 from scipy.sparse.linalg import spsolve
 from scipy.optimize import minimize_scalar
 import numpy as np
+from scipy.interpolate import CubicSpline
 
 class Baseline:
     
     points : np.ndarray
+    L : float
     freqs : Optional[np.ndarray]
+    interpolation : Any
     
     def __init__(self, elevations, distances, precise : bool = True):
         if not precise   :
@@ -17,6 +20,23 @@ class Baseline:
             self.dominant_freqs = self._elevation_frequencies(elevations, distances, 0.0, 1e6)
         else:
             self.points, self.freqs = self._calculate_baseline_precise(elevations, distances)            
+            
+        self.L = distances[-1]
+            
+    def get_baseline_elevation(self, t: float) -> float:
+        """Get baseline elevation at normalized position t (0-1)"""
+        return float(self.interpolation(t))
+
+    def get_baseline_gradient(self, t: float) -> float:        
+        """Calculate baseline gradient at normalized position t (0-1)"""
+        if isinstance(self.interpolation, CubicSpline):
+            return float(self.interpolation.derivative()(t)) / self.L
+        else:
+            # For linear interpolation, use finite differences
+            epsilon = 0.001
+            t1 = max(0, t - epsilon)
+            t2 = min(1, t + epsilon)
+            return (self.get_baseline_elevation(t2) - self.get_baseline_elevation(t1)) / (t2 - t1) / self.L
     
     # ALS smoothing with endpoint constraints
     def _als_baseline(self, y, lam=100, p=0.01, n_iter=10) -> np.ndarray:

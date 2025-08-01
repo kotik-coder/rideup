@@ -2,7 +2,7 @@
 from dataclasses import dataclass, field
 import numpy as np
 from scipy.integrate import quad
-from scipy.interpolate import PchipInterpolator, interp1d
+from scipy.interpolate import PchipInterpolator, interp1d, CubicSpline
 from typing import Any, Dict, List, Tuple
 from scipy.signal import savgol_filter
 
@@ -24,7 +24,45 @@ class ProcessedRoute:
     def __init__(self, route : Route):
         self._create_smooth_route(route)
         self.checkpoints = []
-        self.bounds = []    
+        self.bounds = []
+        
+    def get_oscillations(self, start_index, end_index):        
+        ps = self.smooth_points
+        dist = lambda i: ps[i].distance_from_origin/ps[-1].distance_from_origin
+        eles = lambda i: self.smooth_points[i].elevation
+        base = lambda i: self.baseline.get_baseline_elevation(dist(i))
+        
+        return np.array([ eles(i) - base(i) for i in range(start_index, end_index)])
+    
+    def total_distance(self):
+        return self.smooth_points[-1].distance_from_origin        
+        
+    def get_baseline_elevations_on(self, start_index, end_index):
+        '''Get baseline elevations at endpoints'''
+        dist       = [self.smooth_points[idx].distance_from_origin for idx in (start_index, end_index) ]
+        total_dist = self.total_distance()
+        return [self.baseline.get_baseline_elevation(dist[i]/total_dist) for i in range(2)]                                        
+            
+    def get_elevation(self, t: float) -> float:
+        """Get interpolated elevation at normalized position t (0-1)"""
+        return float(self.interpolators['ele'](t))
+    
+    def get_gradient(self, t: float) -> float:
+        L = self.smooth_points[-1].distance_from_origin
+        """Calculate gradient at normalized position t (0-1)"""
+        if isinstance(self.interpolators['ele'], CubicSpline):
+            return float(self.interpolators['ele'].derivative()(t)) / L
+        else:
+            # For linear interpolation, use finite differences
+            epsilon = 0.001
+            t1 = max(0, t - epsilon)
+            t2 = min(1, t + epsilon)
+            return (self.get_elevation(t2) - self.get_elevation(t1)) / (t2 - t1) / L
+    
+    def get_gradient_at_distance(self, distance: float) -> float:
+        """Calculate gradient at specific distance along route"""
+        t = distance / self.total_distance()
+        return self.get_gradient(t)
     
     def find_closest_route_point(self, point: GeoPoint) -> Tuple[int, GeoPoint]:
         index = min(
@@ -117,6 +155,8 @@ class ProcessedRoute:
                 interp_ele(t_smooth)
             )
         ]
+        
+        self.baseline.interpolation = interp_baseline_final
         
         self.interpolators = {
             'lat': interp_lat,
