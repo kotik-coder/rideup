@@ -2,29 +2,39 @@ from typing import List, Optional
 
 import numpy as np
 from sklearn.cluster import DBSCAN
-from src.routes.baseline import Baseline
 from src.routes.route_processor import ProcessedRoute
 from src.routes.route import GeoPoint
 from src.routes.trail_features import ElevationSegment, GradientSegmentType, TrailFeatureType
+from src.routes.trail_features import TrailFeatureType as tft
+from src.routes.trail_features import GradientSegmentType as gst
 
 from scipy.signal import argrelextrema
 
-from src.ui.map_helpers import print_step
-
 class StaticProfilePoint(GeoPoint):
+    
+    gradient : float
+    baseline : float
+    baseline_gradient : float
+    feature_type  : TrailFeatureType    
+    gradient_type : GradientSegmentType
+    
     """Enhanced GeoPoint with gradient and segment data"""
     def __init__(self, 
                  lat: float, 
                  lon: float, 
                  elevation: float, 
                  distance_from_origin: float, 
-                 gradient: Optional[float] = None,
-                 gradient_type: Optional[GradientSegmentType] = None,
-                 feature_type: Optional[TrailFeatureType] = None):
+                 gradient: float,
+                 gradient_type: GradientSegmentType = gst.FLAT,
+                 feature_type: Optional[TrailFeatureType] = None,
+                 baseline: float = 0,
+                 baseline_gradient: float = 0):
         super().__init__(lat, lon, elevation, distance_from_origin)
         self.gradient = gradient
         self.gradient_type = gradient_type
         self.feature_type = feature_type
+        self.baseline = baseline
+        self.baseline_gradient = baseline_gradient
 
     def to_dict(self) -> dict:
         base = super().to_dict()
@@ -44,38 +54,20 @@ class StaticProfile:
     def __init__(self, proute: ProcessedRoute):
         t_values = np.linspace(0, 1, len(proute.smooth_points))
         gradients = [proute.get_gradient(t) for t in t_values]
+        t = lambda i : proute.baseline.x[i]/proute.baseline.x[-1]
         
         self.points = [ StaticProfilePoint(
-                    p.lat, 
+                    p.lat,
                     p.lon, 
                     p.elevation,
                     p.distance_from_origin,
-                    gradient=float(gradients[i]),
-                    gradient_type=GradientSegmentType.from_gradient(gradients[i])
+                    gradient=gradients[i],
+                    gradient_type=gst.from_gradient(gradients[i]),
+                    baseline=proute.baseline.y[i],
+                    baseline_gradient=proute.baseline.get_baseline_gradient(t(i))
                 )
                 for i, p in enumerate(proute.smooth_points)
-                ]
-        
-    def get_baseline(self, baseline : Baseline, mode = 'elevations') -> Optional[np.ndarray]:
-        distances    = [p.distance_from_origin for p in self.points]            
-        total_distance = distances[-1] if distances else 0
-        
-        # Normalize distances to 0-1 range
-        t_values = np.array(distances) / total_distance
-        
-        result = None
-        
-        if mode == 'elevations':
-            result = np.array([baseline.get_baseline_elevation(t) for t in t_values])
-        elif mode == 'gradients':
-            result = np.array([baseline.get_baseline_gradient(t) for t in t_values])
-        else:
-            print_step("Profile Analysis", "Unknown mode: {mode}", "ERROR")
-            
-        return result
-        
-    def refine_segments_with_baseline(self, segments: List[ElevationSegment], baseline_gradients : np.ndarray):
-        return [s.refine(baseline_gradients) for s in segments]
+                ]        
 
     def classify_roller(self, segment: ElevationSegment, route: ProcessedRoute):
         """Classify roller segments using multi-wavelength analysis"""
@@ -86,7 +78,7 @@ class StaticProfile:
         
         # Get all candidate wavelengths from both methods
         fft_wavelengths     = self._get_fft_based_wavelengths(route.baseline.freqs, segment_length)
-        extrema_wavelengths = self._get_extrema_based_wavelengths(residual, distances)
+        extrema_wavelengths = self._get_extrema_based_wavelengths(residual, distances)        
         
         # Find matching wavelength patterns
         matched_wavelengths = self._find_matching_wavelengths(
@@ -96,8 +88,6 @@ class StaticProfile:
         # Classification logic based on matched patterns
         if matched_wavelengths:
             self._classify_by_wavelength_patterns(segment, matched_wavelengths)
-        else:
-            segment.classify_technical_feature()  # Default fallback
 
     def _get_fft_based_wavelengths(self, freqs, segment_length):
         """Convert FFT frequencies to relevant wavelengths"""
@@ -122,9 +112,9 @@ class StaticProfile:
                         for i in range(1, len(extrema))]
         
         # Cluster similar wavelengths to find dominant local patterns
-        return self._cluster_wavelengths(raw_wavelengths, eps=0.5)
+        return self._cluster_wavelengths(raw_wavelengths, eps=ElevationSegment.WAVELENGTH_CLUSTERING_EPS)
 
-    def _find_matching_wavelengths(self, fft_wavelengths, extrema_wavelengths, tolerance):
+    def _find_matching_wavelengths(self, fft_wavelengths, extrema_wavelengths, tolerance=ElevationSegment.WAVELENGTH_MATCH_TOLERANCE):
         """Find wavelengths present in both FFT and extrema analysis"""
         matches = []
         
@@ -141,19 +131,26 @@ class StaticProfile:
         return list({round((fft+ext)/2, 1) for fft, ext in matches})
 
     def _classify_by_wavelength_patterns(self, segment, wavelengths):
-        """Determine feature type based on wavelength patterns"""
-        for w in sorted(wavelengths):
-            if self.FLOW_WAVELENGTH_RANGE[0] <= w <= self.FLOW_WAVELENGTH_RANGE[1]:
-                
-                if segment.gradient_type in [GradientSegmentType.DESCENT, GradientSegmentType.STEEP_DESCENT]:
-                    segment.feature_type = TrailFeatureType.FLOW_DESCENT                    
-                else:
-                    segment.feature_type = TrailFeatureType.ROLLER
-                    
-                break
+        if not wavelengths:
+            return None
         
         # No matching wavelength in flow range
-        segment.feature_type = TrailFeatureType.TECHNICAL_DESCENT
+        if segment.gradient_type in [gst.DESCENT, gst.STEEP_DESCENT]:
+            segment.feature_type = tft.TECHNICAL_DESCENT        
+            
+        elif segment.gradient_type in [gst.ASCENT, gst.STEEP_ASCENT]:
+            segment.feature_type = tft.TECHNICAL_ASCENT        
+        
+        """Determine feature type based on wavelength patterns"""
+        for w in sorted(wavelengths):
+            if ElevationSegment.FLOW_WAVELENGTH_MIN <= w <= ElevationSegment.FLOW_WAVELENGTH_MAX:
+                                
+                if segment.gradient_type in [gst.DESCENT, gst.STEEP_DESCENT]:
+                    segment.feature_type = tft.FLOW_DESCENT
+                else:
+                    segment.feature_type = tft.ROLLER                    
+                    
+                break                
     
     def _cluster_wavelengths(self, raw_wavelengths, eps=0.5):
         """Group similar wavelengths to find dominant patterns using DBSCAN clustering"""
@@ -188,27 +185,66 @@ class StaticProfile:
 class SegmentProfile:
     
     segments : List[ElevationSegment]
-    
-    def __init__(self, profile: StaticProfile, route : ProcessedRoute):
-        # Step 1: Identify raw segments
-        self._identify_raw_segments(profile)
+        
+    def __init__(self, profile: StaticProfile, route: ProcessedRoute):
+        # Step 1: Identify raw segments (baseline-dominant)
+        self._identify_baseline_trends(profile)
         
         # Step 2: Classify by elevation layer        
         for seg in self.segments:
-            # Macro-features (baseline-dominant)
-            if seg.is_sustained_feature(route):
-                seg.classify_sustained_feature(route)
-            
             # Meso-features (residual-dominant)
-            elif seg.is_roller_candidate():
-                seg.feature_type = TrailFeatureType.ROLLER
-                #profile.classify_roller(seg, route)
-                
-            # Micro-features
-            else:
-                seg.classify_technical_feature()
+            if seg.is_roller_candidate():
+                profile.classify_roller(seg, route)
+            
+            # Analyze actual gradient trends for local features
+            if seg.feature_type is None:  # Only classify if no feature detected yet
+                self._classify_local_features(seg)
         
         self._post_process_segments()
+
+    def _classify_local_features(self, segment: ElevationSegment):
+        """Analyze stored gradient trends to identify local features"""
+        # Calculate statistics from stored gradients
+        gradients = np.array(segment.gradients)
+        avg_gradient = segment.avg_gradient()
+        max_gradient = np.max(gradients)
+        min_gradient = np.min(gradients)
+        gradient_std = np.std(gradients)
+        segment_length = segment.length()
+        
+        # Check for very short, steep features (steps)
+        if segment_length < ElevationSegment.STEP_FEATURE_MAX_LENGTH:
+            if max_gradient > gst.STEEP_ASCENT.min_grad:
+                segment.feature_type = tft.STEP_UP
+            elif min_gradient < gst.STEEP_DESCENT.max_grad:
+                segment.feature_type = tft.STEP_DOWN
+            return
+        
+        # Check for short but significant climbs/descents
+        if (ElevationSegment.SHORT_FEATURE_MIN_LENGTH <= segment_length <= 
+            ElevationSegment.SHORT_FEATURE_MAX_LENGTH):
+            
+            # Calculate elevation change using avg gradient and length
+            elevation_change = abs(avg_gradient * segment_length)
+            
+            if (avg_gradient > ElevationSegment.SHORT_ASCENT_MIN_GRADIENT and
+                elevation_change > ElevationSegment.MIN_ELEVATION_CHANGE):
+                segment.feature_type = tft.SHORT_ASCENT
+            elif (avg_gradient < ElevationSegment.SHORT_DESCENT_MAX_GRADIENT and
+                elevation_change > ElevationSegment.MIN_ELEVATION_CHANGE):
+                segment.feature_type = tft.SHORT_DESCENT
+            return
+        
+        # Check for technical sections
+        if segment_length >= ElevationSegment.TECHNICAL_LENGTH_THRESHOLD:
+            # High variability or consistently steep
+            if (gradient_std > ElevationSegment.TECHNICAL_GRADIENT_STD_THRESHOLD or
+                abs(avg_gradient) > ElevationSegment.TECHNICAL_AVG_GRADE_THRESHOLD):
+                
+                if avg_gradient > 0:
+                    segment.feature_type = tft.TECHNICAL_ASCENT
+                else:
+                    segment.feature_type = tft.TECHNICAL_DESCENT
     
     def _post_process_segments(self):
         """Phase 1 post-processing focused on ride context"""
@@ -217,26 +253,23 @@ class SegmentProfile:
             # Tag segments with riding context
             seg.riding_context = seg.determine_riding_context(self.segments, i)
 
-    def _identify_raw_segments(self, profile: StaticProfile):
+    def _identify_baseline_trends(self, profile: StaticProfile):
         """Identifies continuous segments with consistent gradient characteristics"""        
         self.segments = []
         current_segment = None
 
         for i, point in enumerate(profile.points):
-            if point.gradient is None:
-                continue
 
             # Determine gradient classification
-            current_gradient_type = GradientSegmentType.from_gradient(point.gradient)
+            current_gradient_type = gst.from_gradient(point.baseline_gradient)
             
             if current_segment is None:
                 # Start new segment
                 current_segment = ElevationSegment(
-                    start_idx=i,
-                    gradient_type=current_gradient_type,
-                    gradient=point.gradient,
-                    distance=point.distance_from_origin,
-                    feature_type=None,
+                    start_idx     = i,
+                    gradient_type = current_gradient_type,
+                    gradient      = point.gradient,
+                    distance      = point.distance_from_origin
                 )
             else:
                 if current_segment.should_continue(current_gradient_type):
@@ -251,14 +284,7 @@ class SegmentProfile:
                     if current_segment.validate():
                         self.segments.append(current_segment)
                         
-                    current_segment = ElevationSegment(
-                        start_idx=i,
-                        gradient_type=current_gradient_type,
-                        gradient=point.gradient,
-                        distance=point.distance_from_origin,
-                        feature_type=None
-                    )
-
-        # Add last segment if valid
-        if current_segment and current_segment.validate():
+                    current_segment = None                        
+                    
+        if current_segment:
             self.segments.append(current_segment)

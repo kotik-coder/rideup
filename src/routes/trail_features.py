@@ -1,7 +1,7 @@
 
-from enum import Enum
+from enum import Enum, auto
 from tkinter import FLAT
-from typing import Optional
+from typing import List, Optional
 
 import numpy as np
 
@@ -23,9 +23,8 @@ class GradientSegmentType(Enum):
     def from_gradient(cls, gradient: float) -> 'GradientSegmentType':
         """Classify a gradient into segment type"""
         for segment_type in cls:
-            if segment_type.min_grad is not None and segment_type.max_grad is not None:
-                if segment_type.min_grad <= gradient < segment_type.max_grad:
-                    return segment_type
+            if segment_type.min_grad <= gradient < segment_type.max_grad:
+                return segment_type
         return cls.FLAT
 
     def is_transitional_to(self, other: 'GradientSegmentType') -> bool:
@@ -40,38 +39,60 @@ class GradientSegmentType(Enum):
     
 class TrailFeatureType(Enum):
     """Special trail features with their gradient thresholds"""
-    ROLLER = (None, None)
-    SWITCHBACK = (None, None) 
-    TECHNICAL_DESCENT = (0.15, None)  # Min 15% gradient
-    FLOW_DESCENT = (None, None)
-    DROP_SECTION = (0.15, 15)  # Min 15% gradient AND max 15m length
-
-    def __init__(self, min_gradient: Optional[float], max_length: Optional[float]):
-        self.min_gradient = min_gradient
-        self.max_length = max_length
-
-    @classmethod
-    def is_technical(cls, gradient: float, length: float) -> Optional['TrailFeatureType']:
-        """Returns the appropriate feature type if technical thresholds are met"""
-        for feature in cls:
-            if (feature.min_gradient is not None and abs(gradient) >= feature.min_gradient and
-                (feature.max_length is None or length <= feature.max_length)):
-                return feature
-        return None
+    ROLLER = auto()
+    SWITCHBACK = auto()
+    TECHNICAL_DESCENT = auto()
+    TECHNICAL_ASCENT = auto()
+    FLOW_DESCENT = auto()
+    DROP_SECTION = auto()
+    # New feature types
+    SHORT_ASCENT = auto()       # Rapid one-time ascent
+    SHORT_DESCENT = auto()      # Rapid one-time descent
+    STEP_UP = auto()            # Very short, steep ascent
+    STEP_DOWN = auto()          # Very short, steep descent
 
 class ElevationSegment:
-    
+            
+    # Segment length thresholds
     MIN_SEGMENT_LENGTH = 50         # metres
     MIN_STEEP_LENGTH = 10           # metres
-    TECHNICAL_LENGTH_THRESHOLD = 15 # metres
+    TECHNICAL_LENGTH_THRESHOLD = 15  # metres
+    
+    # Feature classification parameters
+    STEP_FEATURE_MAX_LENGTH = 15        # meters
+    SHORT_FEATURE_MIN_LENGTH = 15       # meters
+    SHORT_FEATURE_MAX_LENGTH = 50       # meters
+    SHORT_ASCENT_MIN_GRADIENT = 0.08    # 8%
+    SHORT_DESCENT_MAX_GRADIENT = -0.08  # -8%
+    
+    # Technical section parameters
+    TECHNICAL_GRADIENT_STD_THRESHOLD = 0.05  # Standard deviation threshold
+    TECHNICAL_AVG_GRADE_THRESHOLD = 0.15     # 15% average grade
+    
+    # Elevation change parameters
+    MIN_ELEVATION_CHANGE = 5           # meters minimum for significant features
+    
+    # Wavelength analysis parameters
+    WAVELENGTH_CLUSTERING_EPS = 0.5    # DBSCAN epsilon parameter
+    WAVELENGTH_MATCH_TOLERANCE = 0.3   # 30% tolerance for wavelength matching
+    FLOW_WAVELENGTH_MIN = 10           # meters
+    FLOW_WAVELENGTH_MAX = 50           # meters
+    
+    start_index : int
+    end_index : int
+    gradient_type : GradientSegmentType
+    feature_type : TrailFeatureType
+    wavelengths : List[float]
+    distances : List[float]
+    gradients : List[float]
     
     """Represents a continuous segment of similar elevation characteristics"""
     def __init__(self, 
                  start_idx: int, 
                  gradient_type: GradientSegmentType,
-                 feature_type: Optional[TrailFeatureType],
                  gradient: float, 
                  distance: float,
+                 feature_type: Optional[TrailFeatureType] = None,
                  end_idx: int = -1
                  ):
         self.start_index = start_idx
@@ -84,18 +105,7 @@ class ElevationSegment:
         self.distances = [distance]
         self.gradients = [gradient]
         self.wavelengths = []
-        self.baseline_gradient = 0
-        self.riding_context = "GENERIC"  # Also good practice to initialize this        
-    
-    def classify_technical_feature(self):
-        
-        feature_type = TrailFeatureType.is_technical(
-            gradient=max(abs(g) for g in self.gradients),
-            length=self.length()
-        )
-        
-        if feature_type:
-            self.feature_type = feature_type
+        self.riding_context = "GENERIC"  # Also good practice to initialize this            
         
     def determine_riding_context(self, segments, index):
         """Updated to check both gradient and feature types"""
@@ -116,17 +126,7 @@ class ElevationSegment:
             return "FLOW"
             
         return "GENERIC"
-    
-    def refine(self, baseline_gradients: np.ndarray):
-        """Applies baseline refinement to a single segment"""
-        seg_gradients = baseline_gradients[self.start_index:self.end_index+1]
-        avg_baseline_grad = np.mean(seg_gradients)
-        baseline_type = GradientSegmentType.from_gradient(avg_baseline_grad)
-
-        # Only override gradient type for sustained features
-        if baseline_type is not FLAT:
-            self.gradient_type = baseline_type         
-    
+        
     def extend(self, 
                     end_idx: int,
                     gradient: float, 
@@ -153,76 +153,22 @@ class ElevationSegment:
         return gradient_ok and feature_ok
     
     def validate(self) -> bool:
-        min_length = (self.MIN_STEEP_LENGTH if self.gradient_type in 
-                     (GradientSegmentType.STEEP_ASCENT, GradientSegmentType.STEEP_DESCENT)
+        min_length = (self.MIN_STEEP_LENGTH if self.gradient_type in (GradientSegmentType.STEEP_ASCENT, GradientSegmentType.STEEP_DESCENT)
                      else self.MIN_SEGMENT_LENGTH)
         return self.length() >= min_length
     
-    def classify_sustained_feature(self, proute: ProcessedRoute):
-        """Classifies sustained features using baseline interpolation"""
-        # Get start and end distances
-        
-        dist = lambda i : proute.smooth_points[i].distance_from_origin 
-        
-        start_dist     = dist(self.start_index)
-        end_dist       = dist(self.end_index)
-        total_distance = proute.total_distance()
-        
-        # Calculate baseline gradient
-        t_start = start_dist / total_distance
-        t_end = end_dist / total_distance
-        elev_start = proute.baseline.get_baseline_elevation(t_start)
-        elev_end   = proute.baseline.get_baseline_elevation(t_end)
-        segment_length = end_dist - start_dist
-        avg_baseline_grad = (elev_end - elev_start) / segment_length if segment_length > 0 else 0
-        
-        base_type = GradientSegmentType.from_gradient(avg_baseline_grad)
-        
-        # Technical overlay check
-        max_raw_grad = max(abs(g) for g in self.gradients)
-        if max_raw_grad > TrailFeatureType.TECHNICAL_DESCENT.min_gradient:
-            if base_type in (GradientSegmentType.DESCENT, GradientSegmentType.STEEP_DESCENT):
-                feature_type = TrailFeatureType.TECHNICAL_DESCENT
-            else:
-                feature_type = None
-        else:
-            feature_type = None
-        
-        self.gradient_type = base_type
-        self.feature_type  = feature_type
-       
-    def is_sustained_feature(self, proute: ProcessedRoute) -> bool:
-        """Identifies baseline-dominant features using baseline interpolation"""
-        # Get start and end distances
-        elev_start, elev_end = proute.get_baseline_elevations_on(self.start_index, self.end_index)
-        
-        seg_len = self.length()
-        
-        if seg_len < 1e-16:
-            return False
-        
-        avg_baseline_grad = (elev_end - elev_start) / seg_len
-        
-        return (abs(avg_baseline_grad) > 0.05 
-                and seg_len > 50)
-        
     def is_roller_candidate(self) -> bool:
         """Determines if a segment qualifies for roller analysis using both gradient
         patterns and baseline residuals."""
         
-        # Basic length and type requirements
-        if self.length() < 15:  # Minimum 15m for consideration
-            return False
-            
-        if self.gradient_type not in (GradientSegmentType.ASCENT, 
-                                     GradientSegmentType.DESCENT,
-                                     GradientSegmentType.STEEP_DESCENT):
+        if self.gradient_type in (GradientSegmentType.ASCENT, 
+                                  GradientSegmentType.STEEP_ASCENT):
             return False
         
         # Gradient oscillation check (at least 3 significant reversals)
         gradient_changes = np.diff(np.sign(self.gradients))
         reversal_count   = np.sum(np.abs(gradient_changes) > 0)
-        return reversal_count >= 2  # 2 changes = 3 monotonic sections
+        return reversal_count > 2 
         
     def length(self) -> float:
         """Calculate segment length in meters"""
@@ -235,21 +181,8 @@ class ElevationSegment:
     def max_gradient(self) -> float:
         """Calculate maximum gradient for the segment"""
         return max(self.gradients) if self.gradient_type in [
-            GradientSegmentType.ASCENT, GradientSegmentType.STEEP_ASCENT
+            GradientSegmentType.ASCENT, GradientSegmentType.STEEP_ASCENT, GradientSegmentType.FLAT
         ] else min(self.gradients)
-
-    def to_dict(self) -> dict:
-        """Convert segment to dictionary representation"""
-        return {
-            'start_index': self.start_index,
-            'end_index': self.end_index,
-            'segment_type': self.gradient_type.name,
-            'avg_gradient': self.avg_gradient(),
-            'max_gradient': self.max_gradient(),
-            'length': self.length(),
-            'start_distance': self.distances[0],
-            'end_distance': self.distances[-1]
-        }
 
 class RouteDifficulty(Enum):
     GREEN = (0, 0.3)       # Easy

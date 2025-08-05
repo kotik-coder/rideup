@@ -29,20 +29,14 @@ class ProcessedRoute:
     def get_oscillations(self, start_index, end_index):        
         ps = self.smooth_points
         dist = lambda i: ps[i].distance_from_origin/ps[-1].distance_from_origin
-        eles = lambda i: self.smooth_points[i].elevation
+        eles = lambda i: ps[i].elevation
         base = lambda i: self.baseline.get_baseline_elevation(dist(i))
         
         return np.array([ eles(i) - base(i) for i in range(start_index, end_index)])
     
     def total_distance(self):
         return self.smooth_points[-1].distance_from_origin        
-        
-    def get_baseline_elevations_on(self, start_index, end_index):
-        '''Get baseline elevations at endpoints'''
-        dist       = [self.smooth_points[idx].distance_from_origin for idx in (start_index, end_index) ]
-        total_dist = self.total_distance()
-        return [self.baseline.get_baseline_elevation(dist[i]/total_dist) for i in range(2)]                                        
-            
+      
     def get_elevation(self, t: float) -> float:
         """Get interpolated elevation at normalized position t (0-1)"""
         return float(self.interpolators['ele'](t))
@@ -76,8 +70,8 @@ class ProcessedRoute:
         Savitzky-Golay filtering for elevations, with PCHIP/Akima interpolation
         where appropriate, while ensuring baseline is calculated on uniform samples.
         """
-        MIN_POINTS_FOR_LINEAR = 100  # Use linear if ≥ 100 points
-        MAX_DISTANCE_FOR_LINEAR = 15.0  # Use linear if avg spacing <15m
+        MIN_POINTS_FOR_LINEAR = 200    # Use linear if ≥ 200 points
+        MAX_DISTANCE_FOR_LINEAR = 5.0  # Use linear if avg spacing <5.0m
 
         points = route.points
         
@@ -109,7 +103,7 @@ class ProcessedRoute:
         # Calculate residuals on original points
         interp_baseline = interp1d(
             t_uniform, 
-            self.baseline.points, 
+            self.baseline.y,
             kind='linear', 
             fill_value='extrapolate'
         )

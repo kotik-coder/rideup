@@ -64,14 +64,13 @@ def calculate_velocity_quartiles(velocities):
     return q1, median, q3
 
 def create_elevation_profile_figure(profile : StaticProfile,
-                                    baseline : Baseline,
                                   highlight_distance: Optional[float] = None) -> go.Figure:
     """Create elevation profile with baseline and median reference."""
     fig = go.Figure()
     
-    distances = [p.distance_from_origin for p in profile.points]
-    elevations   = [p.elevation for p in profile.points]
-    baselines    = profile.get_baseline(baseline)
+    distances   = [p.distance_from_origin for p in profile.points]
+    elevations  = [p.elevation for p in profile.points]
+    baselines   = [p.baseline for p in profile.points]
     
     has_baseline = len(baselines) == len(profile.points)    
     

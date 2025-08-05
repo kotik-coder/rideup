@@ -56,107 +56,148 @@ def hide_base_route(fig: go.Figure,
                 trace.showlegend = False
                 trace.hoverinfo = 'none'
                 
-def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, route_profiles: dict, route : Route):
+def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, route_profiles: dict, route: Route):
     """
     Adds a performant, multi-layered route visualization to a Plotly figure.
-    - Groups segments by type to reduce the number of traces and improve performance.
-    - Uses a shadow/base/highlight design for high contrast against map tiles.
+    - Uses Scattermap instead of Scattermapbox
+    - Maintains feature highlighting within Scattermap's capabilities
+    - Groups segments by type for performance
     """
-    # Visual properties
-    highlight_width = 10
-    base_width = 8
-    shadow_width = 14
-    
-    # Pre-calculate full route coordinates to avoid repetition
+    # Visual properties configuration
+    color_map = {
+        # Base Gradient Segments (medium saturation)
+        GradientSegmentType.ASCENT: "rgba(220, 80, 80, 0.9)",        # Coral red
+        GradientSegmentType.DESCENT: "rgba(80, 130, 220, 0.9)",      # Soft blue
+        GradientSegmentType.STEEP_ASCENT: "rgba(200, 0, 0, 1.0)",    # Strong red
+        GradientSegmentType.STEEP_DESCENT: "rgba(0, 70, 200, 1.0)",  # Strong blue
+        
+        # Technical Features (deep, saturated)
+        TrailFeatureType.TECHNICAL_ASCENT: "rgba(180, 20, 20, 0.95)",  # Dark red
+        TrailFeatureType.TECHNICAL_DESCENT: "rgba(20, 60, 150, 0.95)", # Navy blue
+        
+        # Short Features (bright, slightly muted)
+        TrailFeatureType.SHORT_ASCENT: "rgba(255, 120, 120, 0.95)",   # Bright coral
+        TrailFeatureType.SHORT_DESCENT: "rgba(120, 170, 255, 0.95)",  # Bright sky blue
+        
+        # Steps (vibrant, pure hues)
+        TrailFeatureType.STEP_UP: "rgba(255, 50, 50, 1.0)",          # Pure red
+        TrailFeatureType.STEP_DOWN: "rgba(50, 120, 255, 1.0)",       # Pure blue
+        
+        # Special Features (distinct colors)
+        TrailFeatureType.ROLLER: "rgba(255, 195, 0, 0.95)",          # Golden yellow
+        TrailFeatureType.FLOW_DESCENT: "rgba(100, 220, 100, 0.95)",  # Fresh green
+        TrailFeatureType.SWITCHBACK: "rgba(255, 165, 0, 0.95)",      # Orange
+        TrailFeatureType.DROP_SECTION: "rgba(160, 0, 200, 0.95)"      # Purple
+    }
+
+    width_config = {
+        'shadow': 14,
+        'base': 8,
+        'highlight': {
+            'default': 6,
+            # Technical/Dangerous
+            'TECHNICAL_ASCENT': 8,
+            'TECHNICAL_DESCENT': 8,
+            'DROP_SECTION': 8,
+            # Steep/Challenging
+            'STEEP_ASCENT': 7,
+            'STEEP_DESCENT': 7,
+            'SHORT_ASCENT': 7,
+            'SHORT_DESCENT': 7,
+            # Special Features
+            'SWITCHBACK': 7,
+            'STEP_UP': 6.5,
+            'STEP_DOWN': 6.5
+        }
+    }
+
+    # Pre-calculate full route coordinates
     full_lon = [p.lon for p in r.smooth_points]
     full_lat = [p.lat for p in r.smooth_points]
 
-    # 1. Shadow effect for depth and contrast
+    # 1. Shadow effect
     fig.add_trace(go.Scattermap(
         lon=full_lon,
         lat=full_lat,
         mode="lines",
-        line=dict(width=shadow_width, color="rgba(0, 0, 0, 0.4)"),
+        line=dict(width=width_config['shadow'], color="rgba(0, 0, 0, 0.4)"),
         hoverinfo="none",
         showlegend=False,
         name=f"shadow_{route.name}",
     ))
 
-    # 2. White base route to sit on top of the shadow
+    # 2. Base route
     fig.add_trace(go.Scattermap(
         lon=full_lon,
         lat=full_lat,
         mode="lines",
-        line=dict(width=base_width, color="rgba(255, 255, 255, 0.9)"),
+        line=dict(width=width_config['base'], color="rgba(255, 255, 255, 0.9)"),
         hoverinfo="none",
         showlegend=False,
-        name=f"processed_{route.name}",
+        name=f"base_{route.name}",
     ))
 
-    # 3. Highlighted segments, refactored for performance
+    # 3. Highlighted segments
     if 'segments' in route_profiles and route_profiles['segments']:
-        
         segment_profile = route_profiles['segments']
-        
-        color_map = {
-            GradientSegmentType.ASCENT: "rgba(230, 50, 50, 0.95)",
-            GradientSegmentType.DESCENT: "rgba(50, 100, 230, 0.95)",
-            GradientSegmentType.STEEP_ASCENT: "rgba(255, 0, 0, 1.0)",
-            GradientSegmentType.STEEP_DESCENT: "rgba(0, 0, 255, 1.0)",
-            TrailFeatureType.ROLLER: "rgba(255, 165, 0, 0.95)",
-            TrailFeatureType.SWITCHBACK: "rgba(255, 215, 0, 1.0)"
-        }
-        
-        # Group all points and hover data by their segment type
         traces_data = {}
+        
         for segment in segment_profile.segments:
-            # Access segment_type, start_index, end_index, length, and gradients as dictionary keys
-            # The seg_type from the dictionary will be the string name of the enum, e.g., "ASCENT"
-            seg_type     = segment.gradient_type
-            seg_type_ftr = segment.feature_type
-            
-            seg_type = [ seg_type, seg_type_ftr]
-            
-            start_index    = segment.start_index
-            end_index      = segment.end_index
-            segment_length = segment.length()
-
-            existing_keys = [key for key in seg_type if key in color_map]
-            if not existing_keys:
+                        
+            if segment.feature_type in color_map:
+                seg_type = segment.feature_type
+            elif segment.gradient_type in color_map:
+                seg_type = segment.gradient_type
+            else:
                 continue
             
-            seg_type = existing_keys[0]
-
-            if seg_type not in traces_data:
-                traces_data[seg_type] = {"lon": [], "lat": [], "hovertext": []}
+            start_idx = segment.start_index
+            end_idx = segment.end_index
             
-            segment_points = r.smooth_points[start_index:end_index + 1] 
+            if seg_type not in traces_data:
+                traces_data[seg_type] = {
+                    'lon': [],
+                    'lat': [],
+                    'hovertext': [],
+                    'count': 0
+                }
+            
+            segment_points = r.smooth_points[start_idx:end_idx + 1]
             hover_info = (
                 f"<b>{seg_type.name.replace('_', ' ').title()}</b><br>"
-                f"Length: {segment_length:.0f} m<br>"
-                f"Avg Grade: {segment.avg_gradient() * 100:.1f} % <br>"
-                f"Max Grade: {segment.max_gradient() * 100:.1f} %"
+                f"Length: {segment.length():.0f}m | "
+                f"Grade: {segment.avg_gradient()*100:.1f}%"
             )
             
-            for p in segment_points:
-                traces_data[seg_type]['lon'].append(p.lon)
-                traces_data[seg_type]['lat'].append(p.lat)
-                traces_data[seg_type]['hovertext'].append(hover_info)
+            # Add segment points
+            traces_data[seg_type]['lon'].extend(p.lon for p in segment_points)
+            traces_data[seg_type]['lat'].extend(p.lat for p in segment_points)
+            traces_data[seg_type]['hovertext'].extend([hover_info] * len(segment_points))
+            traces_data[seg_type]['count'] += 1
             
+            # Add break between segments
             traces_data[seg_type]['lon'].append(None)
             traces_data[seg_type]['lat'].append(None)
             traces_data[seg_type]['hovertext'].append(None)
 
+        # Add traces with width variations
         for seg_type, data in traces_data.items():
+            if data['count'] == 0:
+                continue
+                
             fig.add_trace(go.Scattermap(
                 lon=data['lon'],
                 lat=data['lat'],
                 mode="lines",
-                line=dict(width=highlight_width, color=color_map[seg_type]),
+                line=dict(
+                    width=width_config['highlight'].get(seg_type.name, width_config['highlight']['default']),
+                    color=color_map[seg_type]
+                ),
                 hovertext=data['hovertext'],
                 hoverinfo="text",
                 name=seg_type.name.replace('_', ' ').title(),
                 legendgroup="segments",
+                showlegend=True
             ))
 
     add_checkpoints(fig, r)

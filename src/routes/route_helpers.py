@@ -31,7 +31,7 @@ def calculate_sg_window_length(dominant_freqs, distances, oscillations):
         
         return window_length
 
-def resample_uniformly(x, y, min_points = 100, max_distance = 15.0):
+def resample_uniformly(x, y, min_points = 200, max_distance = 5.0):
         
     # First create uniformly resampled version for baseline calculation
     num_uniform_points = int(max(min_points, x[-1] / max_distance))
