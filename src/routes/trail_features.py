@@ -1,31 +1,34 @@
 
 from enum import Enum, auto
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 
-class GradientSegmentType(Enum):
-    """Segment types defined purely by elevation gradient"""
-    ASCENT        = (0.01, 0.10)
-    DESCENT       = (-0.10, -0.01)
-    STEEP_ASCENT  = (0.10, float('inf'))
-    STEEP_DESCENT = (-float('inf'), -0.10)
-    FLAT          = (-0.01, 0.01)
+from src.routes.spot import RatingSystem
 
-    def __init__(self, min_grad: float, max_grad: float):
-        self.min_grad = min_grad
-        self.max_grad = max_grad
+class GradientSegmentType(Enum):
+    """Enum that pulls thresholds from SpotSystem"""
+    ASCENT = "ASCENT"
+    DESCENT = "DESCENT" 
+    STEEP_ASCENT = "STEEP_ASCENT"
+    STEEP_DESCENT = "STEEP_DESCENT"
+    FLAT = "FLAT"
+
+    def get_thresholds(self, spot_system: RatingSystem) -> Tuple[float, float]:
+        """Get thresholds directly from SpotSystem"""
+        return spot_system.gradient_thresholds[self.value]
 
     @classmethod
-    def from_gradient(cls, gradient: float) -> 'GradientSegmentType':
-        """Classify a gradient into segment type"""
+    def from_gradient(cls, gradient: float, spot_system: RatingSystem) -> 'GradientSegmentType':
+        """Classify gradient using dictionary lookup"""
         for segment_type in cls:
-            if segment_type.min_grad <= gradient < segment_type.max_grad:
+            min_grad, max_grad = segment_type.get_thresholds(spot_system)
+            if min_grad <= gradient < max_grad:
                 return segment_type
         return cls.FLAT
 
     def is_transitional_to(self, other: 'GradientSegmentType') -> bool:
-        """Check if transition between two segment types is gradual"""
+        """Transition logic remains enum-based"""
         transitional_pairs = {
             (self.ASCENT, self.STEEP_ASCENT),
             (self.DESCENT, self.STEEP_DESCENT),
@@ -64,27 +67,6 @@ class ShortFeature:
                 f"max_grad={self.max_gradient:.1%}, length={self.length:.1f}m)")
 
 class ElevationSegment:
-            
-    # Segment length thresholds
-    MIN_SEGMENT_LENGTH = 50         # metres
-    MIN_STEEP_LENGTH = 10           # metres
-    TECHNICAL_LENGTH_THRESHOLD = 15  # metres
-    
-    # Feature classification parameters
-    STEP_FEATURE_MAX_LENGTH = 15        # meters
-    
-    # Technical section parameters
-    TECHNICAL_GRADIENT_STD_THRESHOLD = 0.05  # Standard deviation threshold
-    TECHNICAL_AVG_GRADE_THRESHOLD = 0.15     # 15% average grade
-    
-    # Elevation change parameters
-    MIN_ELEVATION_CHANGE = 5           # meters minimum for significant features
-    
-    # Wavelength analysis parameters
-    WAVELENGTH_CLUSTERING_EPS = 0.5    # DBSCAN epsilon parameter
-    WAVELENGTH_MATCH_TOLERANCE = 0.3   # 30% tolerance for wavelength matching
-    FLOW_WAVELENGTH_MIN = 10           # meters
-    FLOW_WAVELENGTH_MAX = 50           # meters
     
     start_index : int
     end_index : int
@@ -141,9 +123,9 @@ class ElevationSegment:
         
         return gradient_ok and feature_ok
     
-    def validate(self) -> bool:
-        min_length = (self.MIN_STEEP_LENGTH if self.gradient_type in (GradientSegmentType.STEEP_ASCENT, GradientSegmentType.STEEP_DESCENT)
-                     else self.MIN_SEGMENT_LENGTH)
+    def validate(self, spot_system : RatingSystem) -> bool:
+        min_length = (spot_system.min_steep_length if self.gradient_type in (GradientSegmentType.STEEP_ASCENT, GradientSegmentType.STEEP_DESCENT)
+                     else spot_system.min_segment_length)
         return self.length() >= min_length
     
     def is_roller_candidate(self) -> bool:
@@ -174,18 +156,20 @@ class ElevationSegment:
         ] else min(self.gradients)
 
 class RouteDifficulty(Enum):
-    GREEN = (0, 0.3)       # Easy
-    BLUE = (0.3, 0.8)      # Intermediate  
-    BLACK = (0.8, 1.5)     # Difficult
-    DOUBLE_BLACK = (1.5, float('inf'))  # Expert
-    
-    def __init__(self, min_threshold, max_threshold):
-        self.min_threshold = min_threshold
-        self.max_threshold = max_threshold
-    
+    GREEN = "GREEN"
+    BLUE = "BLUE"
+    BLACK = "BLACK"
+    DOUBLE_BLACK = "DOUBLE_BLACK"
+
+    def get_thresholds(self, spot_system: RatingSystem) -> Tuple[float, float]:
+        """Get difficulty thresholds from SpotSystem"""
+        return spot_system.difficulty_thresholds[self.value]
+
     @classmethod
-    def from_score(cls, score: float):
+    def from_score(cls, score: float, spot_system: RatingSystem) -> 'RouteDifficulty':
+        """Classify difficulty score using SpotSystem thresholds"""
         for difficulty in cls:
-            if difficulty.min_threshold <= score < difficulty.max_threshold:
+            min_thresh, max_thresh = difficulty.get_thresholds(spot_system)
+            if min_thresh <= score < max_thresh:
                 return difficulty
         return cls.GREEN

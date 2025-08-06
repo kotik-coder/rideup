@@ -1,17 +1,61 @@
 import osmnx as ox
-from typing import Dict, List, Tuple
-from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
 
 from shapely import MultiPolygon, Polygon
 
 # Assuming these are available in your project structure
-from src.routes.statistics_collector import StatisticsCollector
 from src.routes.route_processor import ProcessedRoute, RouteProcessor
 from src.ui.map_helpers import print_step
 from src.iio.gpx_loader import LocalGPXLoader # Assuming LocalGPXLoader is within gpx_loader
 from src.routes.route import Route
 from src.iio.spot_photo import SpotPhoto
 from src.routes.track import Track
+
+@dataclass
+class RatingSystem:
+    """Central configuration for all trail parameters"""
+    # Gradient thresholds (now using direct defaults)
+    gradient_thresholds: Dict[str, Tuple[float, float]] = field(
+        default_factory=lambda: {
+            "ASCENT": (0.01, 0.10),
+            "DESCENT": (-0.10, -0.01),
+            "STEEP_ASCENT": (0.10, float('inf')),
+            "STEEP_DESCENT": (-float('inf'), -0.10),
+            "FLAT": (-0.01, 0.01)
+        }
+    )
+    
+    # Difficulty thresholds
+    difficulty_thresholds: Dict[str, Tuple[float, float]] = field(
+        default_factory=lambda: {
+            "GREEN": (0, 0.3),
+            "BLUE": (0.3, 0.8),
+            "BLACK": (0.8, 1.5),
+            "DOUBLE_BLACK": (1.5, float('inf'))
+        }
+    )
+
+    # Other parameters...
+    min_segment_length: float = 50
+    min_steep_length: float = 10
+    step_feature_max_length: float = 15
+    wavelength_clustering_eps: float = 0.5
+    wavelength_match_tolerance: float = 0.3
+    flow_wavelength_min: float = 10
+    flow_wavelength_max: float = 50
+
+    @classmethod
+    def create(cls, custom_config: Optional[Dict] = None) -> 'RatingSystem':
+        """Factory method for creating configured systems"""
+        system = cls()  # Let dataclass handle initialization
+        
+        if custom_config:
+            for key, value in custom_config.items():
+                if hasattr(system, key):
+                    setattr(system, key, value)
+        
+        return system
 
 @dataclass
 class Spot:
@@ -26,9 +70,9 @@ class Spot:
     processed_routes : Dict[int, ProcessedRoute]
     tracks: List[Track]  # Tracks now contain their route reference
     polygon: any
-    stats_collector : StatisticsCollector
 
-    def __init__(self, geostring: str):
+    def __init__(self, geostring: str, system_config: Optional[Dict] = None):
+        self.system = RatingSystem.create(system_config)  # Add this line
         self.name = geostring
         self.geostring = geostring
         self._photos_loaded = False # Internal flag to prevent redundant photo loading
@@ -40,7 +84,6 @@ class Spot:
         self._get_bounds(geostring)
         self.load_valid_routes_and_tracks()
         self.local_photos = SpotPhoto.load_local_photos(self.bounds)
-        self.stats_collector = StatisticsCollector()
         print_step("Spot", f"Spot '{self.name}' initialized with bounds: {self.bounds}")
         
     def get_processed_route(self, rp : RouteProcessor, route : Route, selected_index : int) -> ProcessedRoute:

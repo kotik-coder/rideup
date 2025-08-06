@@ -10,6 +10,7 @@ from src.routes.spot import Spot
 
 from src.ui.ui_components import create_checkpoint_card, create_route_info_card
 from src.ui.graph_generation import create_elevation_profile_figure, create_velocity_profile_figure
+from src.routes.statistics_collector import generate_route_profiles
 
 def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
     
@@ -101,7 +102,8 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         selected_route = spot.routes[selected_route_index]
         processed_route = spot.get_processed_route(route_processor, selected_route, selected_route_index)
 
-        route_profiles = spot.stats_collector.generate_route_profiles(
+        route_profiles = generate_route_profiles(
+            spot,
             processed_route, 
             [t for t in spot.tracks if t.route == selected_route]
         )
@@ -254,7 +256,8 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         processed_route = spot.get_processed_route(route_processor, selected_route, selected_route_index)
         
         # Generate profiles
-        profiles = spot.stats_collector.generate_route_profiles(
+        profiles = generate_route_profiles(
+            spot,
             processed_route, 
             [t for t in spot.tracks if t.route == selected_route]
         )

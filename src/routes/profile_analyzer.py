@@ -2,6 +2,7 @@ from typing import List, Optional
 
 import numpy as np
 from sklearn.cluster import DBSCAN
+from src.routes.spot import RatingSystem
 from src.routes.route_processor import ProcessedRoute
 from src.routes.route import GeoPoint
 from src.routes.trail_features import ElevationSegment, GradientSegmentType, ShortFeature, TrailFeatureType
@@ -47,11 +48,11 @@ class StaticProfilePoint(GeoPoint):
     
 class StaticProfile:
     
-    FLOW_WAVELENGTH_RANGE = (10, 50)  # meters
-    
     points   : List[StaticProfilePoint]
+    spot_system : RatingSystem
     
-    def __init__(self, proute: ProcessedRoute):
+    def __init__(self, spot_system : RatingSystem, proute: ProcessedRoute):
+        self.spot_system = spot_system
         t_values = np.linspace(0, 1, len(proute.smooth_points))
         gradients = [proute.get_gradient(t) for t in t_values]
         t = lambda i : proute.baseline.x[i]/proute.baseline.x[-1]
@@ -62,7 +63,7 @@ class StaticProfile:
                     p.elevation,
                     p.distance_from_origin,
                     gradient=gradients[i],
-                    gradient_type=gst.from_gradient(gradients[i]),
+                    gradient_type=gst.from_gradient(gradients[i], spot_system),
                     baseline=proute.baseline.y[i],
                     baseline_gradient=proute.baseline.get_baseline_gradient(t(i))
                 )
@@ -82,7 +83,7 @@ class StaticProfile:
         
         # Find matching wavelength patterns
         matched_wavelengths = self._find_matching_wavelengths(
-            fft_wavelengths, extrema_wavelengths, tolerance=0.3
+            fft_wavelengths, extrema_wavelengths, tolerance=self.spot_system.wavelength_match_tolerance
         )
         
         # Classification logic based on matched patterns
@@ -112,9 +113,9 @@ class StaticProfile:
                         for i in range(1, len(extrema))]
         
         # Cluster similar wavelengths to find dominant local patterns
-        return self._cluster_wavelengths(raw_wavelengths, eps=ElevationSegment.WAVELENGTH_CLUSTERING_EPS)
+        return self._cluster_wavelengths(raw_wavelengths, eps=self.spot_system.wavelength_clustering_eps)
 
-    def _find_matching_wavelengths(self, fft_wavelengths, extrema_wavelengths, tolerance=ElevationSegment.WAVELENGTH_MATCH_TOLERANCE):
+    def _find_matching_wavelengths(self, fft_wavelengths, extrema_wavelengths, tolerance):
         """Find wavelengths present in both FFT and extrema analysis"""
         matches = []
         
@@ -143,7 +144,7 @@ class StaticProfile:
         
         """Determine feature type based on wavelength patterns"""
         for w in sorted(wavelengths):
-            if ElevationSegment.FLOW_WAVELENGTH_MIN <= w <= ElevationSegment.FLOW_WAVELENGTH_MAX:
+            if self.spot_system.flow_wavelength_min <= w <= self.spot_system.flow_wavelength_max:
                                 
                 if segment.gradient_type in [gst.DESCENT, gst.STEEP_DESCENT]:
                     segment.feature_type = tft.FLOW_DESCENT
@@ -185,8 +186,10 @@ class StaticProfile:
 class SegmentProfile:
     
     segments : List[ElevationSegment]
+    spot_system : RatingSystem
         
     def __init__(self, profile: StaticProfile, route: ProcessedRoute):
+        self.spot_system = profile.spot_system
         # Step 1: Identify raw segments (baseline-dominant)
         self._identify_baseline_trends(profile)
         
@@ -224,40 +227,67 @@ class SegmentProfile:
             for i in range(1, len(extreme_points)):
                 if extreme_points[i] != extreme_points[i-1] + 1:
                     # End of current feature
-                    extreme_features.append((current_start, max(extreme_points[i-1], current_start + 1) ))
+                    extreme_features.append((current_start, extreme_points[i-1]))
                     current_start = extreme_points[i]
-            extreme_features.append((current_start, max(current_start + 1, extreme_points[-1]) ))
+            extreme_features.append((current_start, extreme_points[-1]))
         
         # Classify extreme features
         for start_idx, end_idx in extreme_features:
-            end_idx = min(len(extreme_features), end_idx)
-            if end_idx < start_idx:
-                start_idx = end_idx - 1
-            # Calculate feature length using distances instead of indices
+            # Calculate feature length using distances
             feature_length = distances[end_idx] - distances[start_idx]
+            
+            # Skip features that are too long or have zero length
+            if (feature_length >= self.spot_system.step_feature_max_length or 
+                feature_length <= 0):
+                continue
+                
             feature_gradients = gradients[start_idx:end_idx+1]
             avg_feature_gradient = np.mean(feature_gradients)
-            max_feature_gradient = np.max(feature_gradients) if avg_feature_gradient > 0 else np.min(feature_gradients)
+            max_feature_gradient = (np.max(feature_gradients) if avg_feature_gradient > 0 
+                                else np.min(feature_gradients))
             
-            # Check for very short, steep features (steps)
-            if feature_length < ElevationSegment.STEP_FEATURE_MAX_LENGTH:
-                if avg_feature_gradient > gst.STEEP_ASCENT.min_grad:
-                    ftr_type = tft.KICKER
-                elif avg_feature_gradient < gst.STEEP_DESCENT.max_grad:
-                    ftr_type = tft.DROP
-                else: 
-                    continue
+            # Check if this feature already exists
+            existing = any(
+                sf.start_index == segment.start_index + start_idx and
+                sf.end_index == segment.start_index + end_idx
+                for sf in segment.short_features
+            )
+            if existing:
+                continue
                 
-                segment.short_features.append(
-                    ShortFeature(
-                        ftr_type,
-                        start_index=segment.start_index + start_idx,
-                        end_index=segment.start_index + end_idx,
-                        max_gradient=max_feature_gradient,
-                        length=feature_length  # Now using correct distance-based length
-                    )
-                )                
-    
+            # Classify feature type
+            steep_ascent_min = gst.STEEP_ASCENT.get_thresholds(self.spot_system)[0]
+            steep_descent_max = gst.STEEP_DESCENT.get_thresholds(self.spot_system)[1]
+            
+            if avg_feature_gradient > steep_ascent_min:
+                ftr_type = tft.KICKER
+            elif avg_feature_gradient < steep_descent_max:
+                ftr_type = tft.DROP
+            else:
+                continue
+            
+            segment.short_features.append(
+                ShortFeature(
+                    ftr_type,
+                    start_index=segment.start_index + start_idx,
+                    end_index=segment.start_index + end_idx,
+                    max_gradient=max_feature_gradient,
+                    length=feature_length
+                )
+            )
+        
+        if not segment.feature_type:
+
+            # Classify segment as Technical if it has multiple unique short features
+            unique_features = set(
+                (f.start_index, f.end_index) for f in segment.short_features
+            )
+            if len(unique_features) >= 2:
+                if segment.gradient_type in [gst.ASCENT, gst.STEEP_ASCENT]:
+                    segment.feature_type = tft.TECHNICAL_ASCENT
+                elif segment.gradient_type in [gst.DESCENT, gst.STEEP_DESCENT]:
+                    segment.feature_type = tft.TECHNICAL_DESCENT 
+
     def _post_process_segments(self):
         """Phase 1 post-processing focused on ride context"""
         
@@ -273,7 +303,7 @@ class SegmentProfile:
         for i, point in enumerate(profile.points):
 
             # Determine gradient classification
-            current_gradient_type = gst.from_gradient(point.baseline_gradient)
+            current_gradient_type = gst.from_gradient(point.baseline_gradient, self.spot_system)
             
             if current_segment is None:
                 # Start new segment
@@ -293,7 +323,7 @@ class SegmentProfile:
                     )
                 else:
                     # Finalize and start new segment
-                    if current_segment.validate():
+                    if current_segment.validate(self.spot_system):
                         self.segments.append(current_segment)
                         
                     current_segment = None                        

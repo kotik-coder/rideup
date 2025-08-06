@@ -4,6 +4,12 @@ from dash import dcc, html
 from src.ui.map_visualization import create_base_map
 from src.routes.spot import Spot
 
+import dash_bootstrap_components as dbc
+from dash import dcc, html
+
+from src.ui.map_visualization import create_base_map
+from src.routes.spot import Spot
+
 def setup_layout(spot: Spot):
     """
     Sets up the main Dash application layout with full-screen map and semi-transparent UI panels.
@@ -73,8 +79,20 @@ def setup_layout(spot: Spot):
                 'bottom': right_panel_bottom_margin
             }),
             
-            # Bottom panel (single graph with selector)
+            # Bottom panel (graph with selector below)
             html.Div([
+                # Graph area
+                dbc.Row([
+                    dbc.Col(
+                        dcc.Graph(
+                            id='profile-graph',
+                            style={'height': '100%', 'width': '100%'}
+                        ),
+                        width=12
+                    )
+                ], style={'height': 'calc(100% - 40px)', 'margin': '0'}),
+                
+                # Radio buttons row (centered below graph)
                 dbc.Row([
                     dbc.Col(
                         dbc.RadioItems(
@@ -85,25 +103,21 @@ def setup_layout(spot: Spot):
                             ],
                             value='elevation',
                             inline=True,
-                            className="me-2",
+                            className="d-flex justify-content-center",
                             style={
                                 'padding': '5px',
-                                'margin-left': '10px',
                                 'font-size': '0.9rem'
                             }
                         ),
-                        width=2,
-                        style={'padding-right': '0'}
-                    ),
-                    dbc.Col(
-                        dcc.Graph(
-                            id='profile-graph',
-                            style={'height': '100%', 'width': '100%'}
-                        ),
-                        width=10,
-                        style={'padding-left': '0'}
+                        width=12
                     )
-                ], style={'height': '100%', 'margin': '0'})
+                ], style={
+                    'height': '40px',
+                    'margin': '0',
+                    'display': 'flex',
+                    'align-items': 'center',
+                    'justify-content': 'center'
+                })
             ], style={
                 'position': 'fixed',
                 'bottom': '20px',
