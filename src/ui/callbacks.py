@@ -8,7 +8,7 @@ from src.ui.map_visualization import *
 from src.routes.route_processor import RouteProcessor
 from src.routes.spot import Spot
 
-from src.ui.ui_components import create_checkpoint_card, create_route_info_card
+from src.ui.ui_components import create_checkpoint_card, create_route_info_card, create_spot_info_card
 from src.ui.graph_generation import create_elevation_profile_figure, create_velocity_profile_figure
 from src.routes.statistics_collector import generate_route_profiles
 
@@ -40,8 +40,16 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         return options if spot.routes else []
 
     @app.callback(
+        Output('spot-general-info', 'children'),
+        Input('initial-load-trigger', 'children')
+    )
+    def initialize_spot_info(initial_load):
+        return create_spot_info_card(spot)
+
+    # Update the route selection callback to use the simplified route info card
+    @app.callback(
         Output('selected-route-index', 'data'),
-        Output('route-general-info', 'children', allow_duplicate=True),  # Remove this output
+        Output('route-general-info', 'children', allow_duplicate=True),
         Output('checkpoint-info', 'children', allow_duplicate=True),
         Output('map-graph', 'figure', allow_duplicate=True),
         Input('route-selector', 'value'),
@@ -107,7 +115,7 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
             processed_route, 
             [t for t in spot.tracks if t.route == selected_route]
         )
-        route_info_ui = create_route_info_card(selected_route, processed_route, route_profiles['segments'])
+        route_info_ui = create_route_info_card(selected_route, processed_route, route_profiles)
         updated_map_figure = update_map_for_selected_route(current_map_figure, 
                                                            spot, 
                                                            selected_route, 

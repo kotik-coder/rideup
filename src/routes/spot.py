@@ -1,10 +1,14 @@
-import osmnx as ox
-from typing import Dict, List, Optional, Tuple
+import requests
+import tempfile
+import rasterio
+from rasterstats import zonal_stats
+from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
-
+import osmnx as ox
 from shapely import MultiPolygon, Polygon
 
 # Assuming these are available in your project structure
+from src.iio.terrain_loader import TerrainLoader
 from src.routes.route_processor import ProcessedRoute, RouteProcessor
 from src.ui.map_helpers import print_step
 from src.iio.gpx_loader import LocalGPXLoader # Assuming LocalGPXLoader is within gpx_loader
@@ -29,10 +33,10 @@ class RatingSystem:
     # Difficulty thresholds
     difficulty_thresholds: Dict[str, Tuple[float, float]] = field(
         default_factory=lambda: {
-            "GREEN": (0, 0.3),
-            "BLUE": (0.3, 0.8),
-            "BLACK": (0.8, 1.5),
-            "DOUBLE_BLACK": (1.5, float('inf'))
+            "GREEN": (0, 2.0), 
+            "BLUE": (2.0, 7.0),
+            "BLACK": (7.0, 15.0),
+            "DOUBLE_BLACK": (15.0, float('inf'))
         }
     )
 
@@ -57,6 +61,14 @@ class RatingSystem:
         
         return system
 
+@dataclass 
+class TerrainAnalysis:
+    """Stores terrain type information for a spot"""
+    surface_types: Dict[str, float]  # Surface type distribution (e.g., {'dirt': 0.6, 'gravel': 0.3})
+    landcover_types: Dict[str, float]  # ESA WorldCover classification
+    dominant_trail_surface: str
+    traction_score: float  # 0-1 estimate of overall traction
+
 @dataclass
 class Spot:
     name: str
@@ -70,6 +82,7 @@ class Spot:
     processed_routes : Dict[int, ProcessedRoute]
     tracks: List[Track]  # Tracks now contain their route reference
     polygon: any
+    terrain: TerrainAnalysis
 
     def __init__(self, geostring: str, system_config: Optional[Dict] = None):
         self.system = RatingSystem.create(system_config)  # Add this line
@@ -84,8 +97,41 @@ class Spot:
         self._get_bounds(geostring)
         self.load_valid_routes_and_tracks()
         self.local_photos = SpotPhoto.load_local_photos(self.bounds)
+        self.terrain = None  # Will hold TerrainAnalysis object
+        self._load_terrain_data()  # New terrain loading
         print_step("Spot", f"Spot '{self.name}' initialized with bounds: {self.bounds}")
+                
+    def _recommend_bike_type(self, surface: str, traction: float) -> str:
+        """Suggest suitable bike type based on terrain"""
+        if traction > 0.7:
+            return "XC/Race"
+        elif traction > 0.45:
+            return "Trail/All-Mountain"
+        elif surface in ["sand", "mud"]:
+            return "Fat Bike"
+        else:
+            return "Enduro/DH"
+
+    def _load_terrain_data(self):
+        """Simplified terrain loading using TerrainLoader"""
+        self.terrain = TerrainLoader.load_terrain(self.geostring, self.polygon)
         
+        # Print formatted results
+        if self.terrain.surface_types:
+            surface_report = "\n".join(
+                f"- {k}: {v:.1%}" 
+                for k, v in sorted(
+                    self.terrain.surface_types.items(),
+                    key=lambda x: -x[1]
+                )
+            )
+            print_step("Terrain",
+                f"Trail Surfaces:\n{surface_report}\n"
+                f"Dominant: {self.terrain.dominant_surface}\n"
+                f"Traction: {self.terrain.traction_score:.0%}\n"
+                f"Recommended bike type: {self._recommend_bike_type(self.terrain.dominant_surface, self.terrain.traction_score)}"
+            )
+
     def get_processed_route(self, rp : RouteProcessor, route : Route, selected_index : int) -> ProcessedRoute:
         route_dict = self.processed_routes
         

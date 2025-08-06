@@ -45,8 +45,20 @@ def setup_layout(spot: Spot):
         
         # Semi-transparent panels
         html.Div([
-            # Right-side panel (route selection and info)
+            # Right-side panel (spot info, route selection and info)
             html.Div([
+                # Spot info card (always visible)
+                dbc.Card([
+                    dbc.CardHeader("Spot Information", className="font-weight-bold py-2"),
+                    dbc.CardBody([
+                        html.Div(id='spot-general-info')
+                    ], className="py-2")
+                ], style={
+                    'background-color': 'rgba(255, 255, 255, 0.85)',
+                    'margin-bottom': '10px'
+                }),
+                
+                # Route selection and info card
                 dbc.Card([
                     dbc.CardHeader("Маршрут", className="font-weight-bold py-2"),
                     dbc.CardBody([
@@ -66,7 +78,7 @@ def setup_layout(spot: Spot):
                     ], className="py-2")
                 ], style={
                     'background-color': 'rgba(255, 255, 255, 0.85)',
-                    'height': f'calc(100vh - 40px - {graph_panel_height})',
+                    'height': f'calc(100vh - 200px - {graph_panel_height})',
                     'overflow-y': 'auto'
                 })
             ], style={

@@ -4,18 +4,113 @@ from dash import html, dcc
 import numpy as np
 import plotly.graph_objects as go
 
+from src.routes.spot import Spot
 from src.routes.trail_features import ElevationSegment, TrailFeatureType
 from src.routes.profile_analyzer import SegmentProfile
 from src.routes.route import Route
 from src.routes.route_processor import ProcessedRoute
 from src.ui.trail_style import get_arrow_size, get_feature_color, get_feature_description, get_feature_name, get_gradient_direction, get_segment_name
 
-def create_route_info_card(route: Route, processed_route: ProcessedRoute, segment_profile: SegmentProfile = None):
-    """Optimized card using ElevationSegment directly"""
-    segments = segment_profile.segments
+from dash import dash_table
+from dash.dash_table.Format import Format, Scheme
+
+def create_spot_info_card(spot: Spot):
+    """Compact spot card showing top 5 surface types"""
+    if not spot.terrain:
+        return dbc.Card([
+            dbc.CardHeader("Spot Overview", className="font-weight-bold py-2"),
+            dbc.CardBody([
+                html.H5(spot.name, className="mb-0")
+            ])
+        ])
+
+    total_routes = len(spot.routes)
+    total_distance = sum(r.total_distance for r in spot.routes) / 1000
+
+    # Prepare top 5 surface indicators
+    surface_rows = []
+    if spot.terrain.surface_types:
+        surfaces = sorted(
+            spot.terrain.surface_types.items(),
+            key=lambda x: -x[1]
+        )[:5]  # Top 5 surfaces
+        
+        for surface, percent in surfaces:
+            icon = spot.terrain.surface_icons.get(surface.lower(), '▪')
+            surface_rows.append(
+                dbc.Row([
+                    dbc.Col(
+                        html.Span(f"{icon} {surface.capitalize()}", 
+                                className="text-muted"),
+                        width=6, className="pe-0"
+                    ),
+                    dbc.Col(
+                        html.Div(f"{percent:.0%}", 
+                                className="text-end"),
+                        width=6, className="ps-0"
+                    )
+                ], className="g-0 mb-1")
+            )
+
+    return dbc.Card([
+        dbc.CardHeader("Spot Overview", className="font-weight-bold py-2"),
+        dbc.CardBody([
+            # Spot name and primary stats
+            html.H5(spot.name, className="mb-2"),
+            
+            dbc.Row([
+                dbc.Col([
+                    html.Small("Primary Surface", className="text-muted d-block"),
+                    f"{spot.terrain.dominant_surface.capitalize()}"
+                ], width=6),
+                dbc.Col([
+                    html.Small("Traction", className="text-muted d-block"), 
+                    f"{spot.terrain.traction_score:.0%}"
+                ], width=6)
+            ], className="mb-2"),
+            
+            # Recommended bike
+            html.Small("Recommended Bike", className="text-muted d-block"),
+            html.Div(
+                spot._recommend_bike_type(
+                    spot.terrain.dominant_surface,
+                    spot.terrain.traction_score
+                ),
+                className="mb-3"
+            ),
+            
+            # Surface composition header
+            html.Div([
+                html.Span("Surface Composition", className="text-muted"),
+                html.Span(f" (Top 5)", className="text-muted")
+            ], className="small mb-1"),
+            
+            # Surface types - now showing 5
+            html.Div(surface_rows, className="mb-2"),
+            
+            # Route stats
+            dbc.Row([
+                dbc.Col([
+                    html.Small("Total Routes", className="text-muted d-block"),
+                    str(total_routes)
+                ], width=6),
+                dbc.Col([
+                    html.Small("Total Distance", className="text-muted d-block"),
+                    f"{total_distance:.1f} km"
+                ], width=6)
+            ])
+        ], className="py-2")
+    ], style={
+        'background-color': 'rgba(255, 255, 255, 0.95)',
+        'font-size': '0.9rem'
+    })
+
+def create_route_info_card(route: Route, processed_route: ProcessedRoute, route_data: dict):
+    """Optimized card with difficulty rating and enhanced elevation display"""
+    segments = route_data['segments'].segments
     
     # Create visualization with direct segment objects
-    route_viz = create_segment_visualization(segments)
+    route_viz = create_segment_visualization(segments) if segments else None
     
     # Convert long distances to km
     def format_distance(meters):
@@ -24,14 +119,23 @@ def create_route_info_card(route: Route, processed_route: ProcessedRoute, segmen
         return f"{meters:.0f} m"
     
     total_length = processed_route.smooth_points[-1].distance_from_origin
-    elevs     = [p.elevation for p in processed_route.smooth_points]
+    elevs = [p.elevation for p in processed_route.smooth_points]
     mean_elev = np.mean(elevs)
     elevation_gain = max(elevs) - mean_elev
     elevation_loss = mean_elev - min(elevs)
     
+    # Get difficulty rating
+    difficulty = route_data.get('difficulty', 'GREEN')
+    difficulty_color = {
+        'GREEN': 'success',
+        'BLUE': 'primary',
+        'BLACK': 'dark',
+        'DOUBLE_BLACK': 'danger'
+    }.get(difficulty, 'secondary')
+    
     # Create feature statistics with formatted distances
     feature_stats = {}
-    for seg in segment_profile.segments:
+    for seg in segments:
         if seg.feature_type:
             name = get_feature_name(seg.feature_type)
             if name not in feature_stats:
@@ -47,33 +151,44 @@ def create_route_info_card(route: Route, processed_route: ProcessedRoute, segmen
             feature_stats[name]['avg_gradient'] = seg.avg_gradient() * 100
 
     return dbc.Card([
-        dbc.CardHeader(route.name, className="fw-bold"),
+        dbc.CardHeader([
+            html.Div(route.name, className="fw-bold d-inline"),
+            dbc.Badge(difficulty, color=difficulty_color, className="ms-2")
+        ], className="d-flex align-items-center"),
         dbc.CardBody([
+            # Route statistics section
             dbc.Row([
                 dbc.Col([
-                    html.Div("Total Distance", className="small text-muted"),
+                    html.Div("Elevation", className="small text-muted"),
+                    html.Div([
+                        html.Span(f"+{elevation_gain:.0f}m", className="text-success"),
+                        html.Span(" / ", className="mx-1"),
+                        html.Span(f"-{elevation_loss:.0f}m", className="text-danger")
+                    ], className="h5 mb-0")
+                ], width=4),
+                dbc.Col([
+                    html.Div("Distance", className="small text-muted"),
                     html.Div(format_distance(total_length), className="h5 mb-0")
                 ], width=4),
                 dbc.Col([
-                    html.Div("Elevation Gain", className="small text-muted"),
-                    html.Div(format_distance(elevation_gain), className="h5 mb-0")
-                ], width=4),
-                dbc.Col([
-                    html.Div("Elevation Loss", className="small text-muted"),
-                    html.Div(format_distance(elevation_loss), className="h5 mb-0")
+                    html.Div("Difficulty", className="small text-muted"),
+                    html.Div(difficulty, className="h5 mb-0")
                 ], width=4),
             ], className="mb-3"),
             
+            # Route profile visualization
             html.H5("Route Profile", className="mt-3 mb-2 fs-6"),
-            html.Div(route_viz, className="mb-3"),
+            html.Div(route_viz, className="mb-3") if route_viz else None,
             
+            # Feature details
             html.H5("Feature Details", className="mt-3 mb-2 fs-6"),
             html.Div(
-                _create_feature_details(feature_stats, format_distance),
+                _create_feature_details(feature_stats, format_distance) if feature_stats else 
+                html.P("No trail features detected", className="text-muted"),
                 className="small"
             )
         ], className="py-2")
-    ], style={"maxHeight": "500px", "overflowY": "auto"})
+    ])
 
 def create_segment_visualization(segments: List[ElevationSegment]):
     """Create keyboard-style visualization with external tooltips"""
