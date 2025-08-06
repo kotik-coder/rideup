@@ -1,203 +1,208 @@
+from typing import List
 import dash_bootstrap_components as dbc
-from dash import html
+from dash import html, dcc
 import numpy as np
+import plotly.graph_objects as go
 
+from src.routes.trail_features import ElevationSegment, TrailFeatureType
 from src.routes.profile_analyzer import SegmentProfile
 from src.routes.route import Route
-from src.routes.checkpoints import Checkpoint, PhotoCheckpoint
 from src.routes.route_processor import ProcessedRoute
+from src.ui.trail_style import get_arrow_size, get_feature_color, get_feature_description, get_feature_name, get_gradient_direction, get_segment_name
 
 def create_route_info_card(route: Route, processed_route: ProcessedRoute, segment_profile: SegmentProfile = None):
-    """
-    Generates an enhanced route information card with detailed feature breakdown.
-    Args:
-        route: The Route object containing basic route information
-        processed_route: The ProcessedRoute object containing processed data
-        segment_profile: Optional SegmentProfile containing feature analysis
-    """
-    # Feature descriptions
-    FEATURE_DESCRIPTIONS = {
-        'Roller': "Repeated undulations (10-50m wavelength)",
-        'Switchback': "Sharp 180° turns changing direction",
-        'Technical Descent': "Challenging downhill with obstacles",
-        'Technical Ascent': "Challenging uphill requiring skill",
-        'Flow Descent': "Smooth, rhythmic downhill section",
-        'Drop Section': "Sudden steep descent or drop",
-        'Short Ascent': "Brief but intense climb (15-50m)",
-        'Short Descent': "Brief but steep downhill (15-50m)",
-        'Step Up': "Very short, steep climb (<15m)",
-        'Step Down': "Very short, steep drop (<15m)",
-        'Ascent': "Moderate uphill (1-10% grade)",
-        'Descent': "Moderate downhill (-1% to -10% grade)",
-        'Steep Ascent': "Very steep climb (>10% grade)",
-        'Steep Descent': "Very steep downhill (<-10% grade)",
-        'Short Ascent': "Brief but intense climb (15-50m, >8% grade)",
-        'Short Descent': "Brief but steep downhill (15-50m, <-8% grade)",
-        'Step Up': "Very short, steep climb (<15m, >10% grade)",
-        'Step Down': "Very short, steep drop (<15m, <-10% grade)",
-        'Switchback': "Sharp 180° turns changing direction (steep grade changes)"
-    }
-
-    # Basic route stats
-    mean_elevation = np.mean([p.elevation for p in route.points])
-    max_elevation = max(p.elevation for p in route.points)
-    min_elevation = min(p.elevation for p in route.points)
-    elevation_gain = max_elevation - min_elevation
+    """Optimized card using ElevationSegment directly"""
+    segments = segment_profile.segments
     
+    # Create visualization with direct segment objects
+    route_viz = create_segment_visualization(segments)
+    
+    # Convert long distances to km
+    def format_distance(meters):
+        if meters >= 1000:
+            return f"{meters/1000:.1f} km"
+        return f"{meters:.0f} m"
+    
+    total_length = processed_route.smooth_points[-1].distance_from_origin
+    elevs     = [p.elevation for p in processed_route.smooth_points]
+    mean_elev = np.mean(elevs)
+    elevation_gain = max(elevs) - mean_elev
+    elevation_loss = mean_elev - min(elevs)
+    
+    # Create feature statistics with formatted distances
     feature_stats = {}
-
-    if segment_profile and hasattr(segment_profile, 'segments'):
-        segments = segment_profile.segments
-    elif hasattr(processed_route, 'segments'):
-        segments = processed_route.segments
-    else:
-        segments = []
-
-    for segment in segments:
-        # Process main feature type
-        feature_type = segment.feature_type if segment.feature_type else segment.gradient_type
-        if feature_type:
-            feature_name = feature_type.name.replace('_', ' ').title()
-            if feature_name not in feature_stats:
-                feature_stats[feature_name] = {
+    for seg in segment_profile.segments:
+        if seg.feature_type:
+            name = get_feature_name(seg.feature_type)
+            if name not in feature_stats:
+                feature_stats[name] = {
                     'count': 0,
                     'total_length': 0,
-                    'avg_gradient': [],
-                    'description': FEATURE_DESCRIPTIONS.get(feature_name, "Trail feature")
+                    'max_gradient': -float('inf'),
+                    'color': get_feature_color(seg),
+                    'description': get_feature_description(seg.feature_type)
                 }
-            feature_stats[feature_name]['count'] += 1
-            feature_stats[feature_name]['total_length'] += segment.length()
-            feature_stats[feature_name]['avg_gradient'].append(segment.avg_gradient())
-        
-        # Process short features
-        for start_idx, end_idx, short_feature in getattr(segment, 'short_features', []):
-            feature_name = short_feature.name.replace('_', ' ').title()
-            if feature_name not in feature_stats:
-                feature_stats[feature_name] = {
-                    'count': 0,
-                    'total_length': 0,
-                    'avg_gradient': [],
-                    'description': FEATURE_DESCRIPTIONS.get(feature_name, "Short trail feature")
-                }
-            feature_stats[feature_name]['count'] += 1
-            # Calculate length for short features
-            short_length = segment.distances[end_idx] - segment.distances[start_idx]
-            feature_stats[feature_name]['total_length'] += short_length
-            # Calculate average gradient for the short feature
-            short_gradients = segment.gradients[start_idx-segment.start_index:end_idx-segment.start_index+1]
-            feature_stats[feature_name]['avg_gradient'].append(np.mean(short_gradients))
-    
-    # Create feature list items with tooltips
-    feature_items = []
-    for feature, stats in feature_stats.items():
-        avg_grad = np.mean(stats['avg_gradient']) * 100
-        feature_items.append(
-            dbc.ListGroupItem([
-                html.Div([
-                    html.Span(
-                        feature,
-                        className="fw-bold",
-                        id=f"tooltip-{feature.lower().replace(' ', '-')}",
-                        style={"cursor": "pointer"}
-                    ),
-                    dbc.Tooltip(
-                        stats['description'],
-                        target=f"tooltip-{feature.lower().replace(' ', '-')}",
-                        placement="top"
-                    ),
-                    html.Span(f" ×{stats['count']}", className="text-muted ms-2")
-                ]),
-                html.Div([
-                    html.Span(f"{stats['total_length']:.0f}m", className="me-2"),
-                    html.Span(f"avg {avg_grad:.1f}%", className="text-muted")
-                ], className="small")
-            ])
-        )
+            feature_stats[name]['count'] += 1
+            feature_stats[name]['total_length'] += seg.length()
+            feature_stats[name]['avg_gradient'] = seg.avg_gradient() * 100
 
     return dbc.Card([
         dbc.CardHeader(route.name, className="fw-bold"),
         dbc.CardBody([
             dbc.Row([
-                # ... (existing stats row remains the same)
+                dbc.Col([
+                    html.Div("Total Distance", className="small text-muted"),
+                    html.Div(format_distance(total_length), className="h5 mb-0")
+                ], width=4),
+                dbc.Col([
+                    html.Div("Elevation Gain", className="small text-muted"),
+                    html.Div(format_distance(elevation_gain), className="h5 mb-0")
+                ], width=4),
+                dbc.Col([
+                    html.Div("Elevation Loss", className="small text-muted"),
+                    html.Div(format_distance(elevation_loss), className="h5 mb-0")
+                ], width=4),
             ], className="mb-3"),
             
-            html.H5("Trail Features", className="mt-3 mb-2 fs-6"),
-            dbc.ListGroup(feature_items, flush=True, className="small"),
+            html.H5("Route Profile", className="mt-3 mb-2 fs-6"),
+            html.Div(route_viz, className="mb-3"),
             
-            html.H5("Technical Sections", className="mt-3 mb-2 fs-6"),
+            html.H5("Feature Details", className="mt-3 mb-2 fs-6"),
             html.Div(
-                _create_technical_summary(feature_stats),
-                className="small"
-            ),
-            
-            # New section for Short Features
-            html.H5("Short Challenging Features", className="mt-3 mb-2 fs-6"),
-            html.Div(
-                _create_short_features_summary(feature_stats),
+                _create_feature_details(feature_stats, format_distance),
                 className="small"
             )
         ], className="py-2")
-    ], style={"maxHeight": "400px", "overflowY": "auto"})
+    ], style={"maxHeight": "500px", "overflowY": "auto"})
 
-def _create_technical_summary(feature_stats):
-    """Helper to create technical difficulty summary"""
-    tech_features = [
-        'Technical Ascent', 'Technical Descent',
-        'Drop Section', 'Steep Ascent', 'Steep Descent',
-        'Step Up', 'Step Down', 'Switchback'  # Added short features
-    ]
+def create_segment_visualization(segments: List[ElevationSegment]):
+    """Create keyboard-style visualization with external tooltips"""
+    fig = go.Figure()
     
-    tech_items = []
-    total_tech_length = 0
+    for i, seg in enumerate(segments):
+        color = get_feature_color(seg)
+        arrow_size = get_arrow_size(seg)
+        direction = get_gradient_direction(seg.avg_gradient())
+                        
+        # Main segment bar with ID for tooltip targeting
+        fig.add_trace(go.Bar(
+            x=[i],
+            y=[1],
+            width=[0.9],
+            marker=dict(
+                color=color if color else 'white',
+                line=dict(width=1, color='#333')
+            ),
+            hoverinfo='skip',
+            showlegend=False,
+            customdata=[i]  # Store segment index
+        ))
+        
+        # Direction arrow annotation
+        fig.add_annotation(
+            x=i,
+            y=0.5,
+            text=direction,
+            showarrow=False,
+            font=dict(
+                size=arrow_size,
+                color='#333' if color == 'white' else 'black'
+            ),
+            yanchor='middle'
+        )
+        
+        # Short features indicators (red circles below the bar)
+        if seg.short_features:
+            num_features = len(seg.short_features)
+            spacing = 0.8 / max(num_features, 1)
+            
+            for j, feature in enumerate(seg.short_features):
+                fig.add_annotation(
+                    x=i - 0.4 + (j + 0.5) * spacing,
+                    y=-0.2,
+                    text="•",
+                    showarrow=False,
+                    font=dict(
+                        size=14,
+                        color='red'
+                    ),
+                    yanchor='middle'
+                )
     
-    for feature in tech_features:
-        if feature in feature_stats:
-            length = feature_stats[feature]['total_length']
-            total_tech_length += length
-            avg_grad = np.mean(feature_stats[feature]['avg_gradient']) * 100
-            tech_items.append(
-                html.Li(f"{feature}: {length:.0f}m (avg {avg_grad:.1f}%)")
+    fig.update_layout(
+        margin={'l': 0, 'r': 0, 't': 0, 'b': 20},
+        height=60,
+        xaxis={'visible': False, 'range': [-0.5, len(segments)-0.5]},
+        yaxis={'visible': False, 'range': [-0.5, 1]},
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        bargap=0.1
+    )
+    
+    # Create the graph component
+    graph = dcc.Graph(
+        id='route-profile-graph',
+        figure=fig,
+        config={'staticPlot': True},
+        style={
+            'height': '60px',
+            'width': '100%',
+            'cursor': 'pointer'  # Show pointer cursor to indicate interactivity
+        }
+    )
+    
+    # Create invisible divs for each segment that will trigger tooltips
+    trigger_divs = [
+        html.Div(
+            id=f'segment-{i}',
+            style={
+                'position': 'absolute',
+                'left': f'{i*(100/len(segments))}%',
+                'width': f'{90/len(segments)}%',
+                'height': '60px',
+                'zIndex': '100',
+                'pointerEvents': 'auto'
+            }
+        ) for i in range(len(segments))
+    ]    
+    
+    # Wrap everything in a container with relative positioning
+    return html.Div(
+        [
+            html.Div(
+                trigger_divs + [graph],
+                style={'position': 'relative'}
             )
-    
-    if not tech_items:
-        return html.P("No significant technical sections", className="text-muted")
-    
-    tech_percentage = (total_tech_length / sum(
-        stats['total_length'] for stats in feature_stats.values()
-    )) * 100
-    
-    return html.Ul([
-        *tech_items,
-        html.Li(f"Total Technical: {total_tech_length:.0f}m ({tech_percentage:.0f}%)", 
-               className="fw-bold mt-1")
-    ], className="list-unstyled")
+        ],
+        style={'position': 'relative'}
+    )
 
-def _create_short_features_summary(feature_stats):
-    """Helper to create summary of short challenging features"""
-    short_features = [
-        'Step Up', 'Step Down', 'Switchback', 'Short Ascent', 'Short Descent'
-    ]
+def _create_feature_details(feature_stats: dict, format_distance):
+    """Create detailed feature statistics with formatted distances"""
+    if not feature_stats:
+        return html.P("No trail features detected", className="text-muted")
     
-    short_items = []
-    total_short_count = 0
+    items = []
+    for name, stats in sorted(feature_stats.items(), 
+                             key=lambda x: (-x[1]['total_length'], x[0])):
+        # Main feature stats
+        feature_item = [
+            html.Span("■", style={
+                "color": stats['color'],
+                "fontSize": "1.2em",
+                "verticalAlign": "middle"
+            }),
+            html.Span(f" {name}: ", className="ms-1 fw-bold"),
+            html.Span(f"{stats['count']} segments", className="me-2"),
+            html.Span(f"{format_distance(stats['total_length'])} total", className="me-2"),
+            html.Span(f"avg {stats['avg_gradient']:.1f}%", className="me-2"),
+            html.Br(),
+            html.Span(stats['description'], className="text-muted font-italic")
+        ]
+        
+        items.append(html.Li(feature_item, className="mb-3"))
     
-    for feature in short_features:
-        if feature in feature_stats:
-            count = feature_stats[feature]['count']
-            total_short_count += count
-            avg_grad = np.mean(feature_stats[feature]['avg_gradient']) * 100
-            short_items.append(
-                html.Li(f"{feature}: {count} (avg {avg_grad:.1f}%)")
-            )
-    
-    if not short_items:
-        return html.P("No significant short challenging features", className="text-muted")
-    
-    return html.Ul([
-        *short_items,
-        html.Li(f"Total Short Features: {total_short_count}", 
-               className="fw-bold mt-1")
-    ], className="list-unstyled")
+    return html.Ul(items, className="list-unstyled")
 
 def create_checkpoint_card(checkpoint, route : ProcessedRoute):
     """

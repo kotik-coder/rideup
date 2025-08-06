@@ -1,13 +1,12 @@
 # map_visualization.py
-import numpy as np
 import plotly.graph_objects as go
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List
 
 from src.ui.map_helpers import bounds_to_zoom, print_step
 from src.routes.route import Route
 from src.routes.route_processor import ProcessedRoute
 from src.routes.spot import Spot
-from src.routes.statistics_collector import GradientSegmentType, TrailFeatureType
+from src.ui.trail_style import COLOR_MAP, WIDTH_CONFIG
 
 intermediate_points_label = "Intermediate"
 checkpoints_label = "Checkpoint"
@@ -56,6 +55,7 @@ def hide_base_route(fig: go.Figure,
                 trace.showlegend = False
                 trace.hoverinfo = 'none'
                 
+
 def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, route_profiles: dict, route: Route):
     """
     Adds a performant, multi-layered route visualization to a Plotly figure.
@@ -63,53 +63,9 @@ def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, route_profiles: 
     - Maintains feature highlighting within Scattermap's capabilities
     - Groups segments by type for performance
     """
-    # Visual properties configuration
-    color_map = {
-        # Base Gradient Segments (medium saturation)
-        GradientSegmentType.ASCENT: "rgba(220, 80, 80, 0.9)",        # Coral red
-        GradientSegmentType.DESCENT: "rgba(80, 130, 220, 0.9)",      # Soft blue
-        GradientSegmentType.STEEP_ASCENT: "rgba(200, 0, 0, 1.0)",    # Strong red
-        GradientSegmentType.STEEP_DESCENT: "rgba(0, 70, 200, 1.0)",  # Strong blue
-        
-        # Technical Features (deep, saturated)
-        TrailFeatureType.TECHNICAL_ASCENT: "rgba(180, 20, 20, 0.95)",  # Dark red
-        TrailFeatureType.TECHNICAL_DESCENT: "rgba(20, 60, 150, 0.95)", # Navy blue
-        
-        # Short Features (bright, slightly muted)
-        TrailFeatureType.SHORT_ASCENT: "rgba(255, 120, 120, 0.95)",   # Bright coral
-        TrailFeatureType.SHORT_DESCENT: "rgba(120, 170, 255, 0.95)",  # Bright sky blue
-        
-        # Steps (vibrant, pure hues)
-        TrailFeatureType.STEP_UP: "rgba(255, 50, 50, 1.0)",          # Pure red
-        TrailFeatureType.STEP_DOWN: "rgba(50, 120, 255, 1.0)",       # Pure blue
-        
-        # Special Features (distinct colors)
-        TrailFeatureType.ROLLER: "rgba(255, 195, 0, 0.95)",          # Golden yellow
-        TrailFeatureType.FLOW_DESCENT: "rgba(100, 220, 100, 0.95)",  # Fresh green
-        TrailFeatureType.SWITCHBACK: "rgba(255, 165, 0, 0.95)",      # Orange
-        TrailFeatureType.DROP_SECTION: "rgba(160, 0, 200, 0.95)"      # Purple
-    }
-
-    width_config = {
-        'shadow': 14,
-        'base': 8,
-        'highlight': {
-            'default': 6,
-            # Technical/Dangerous
-            'TECHNICAL_ASCENT': 8,
-            'TECHNICAL_DESCENT': 8,
-            'DROP_SECTION': 8,
-            # Steep/Challenging
-            'STEEP_ASCENT': 7,
-            'STEEP_DESCENT': 7,
-            'SHORT_ASCENT': 7,
-            'SHORT_DESCENT': 7,
-            # Special Features
-            'SWITCHBACK': 7,
-            'STEP_UP': 6.5,
-            'STEP_DOWN': 6.5
-        }
-    }
+    # Use configurations from trail_style.py
+    color_map = COLOR_MAP
+    width_config = WIDTH_CONFIG
 
     # Pre-calculate full route coordinates
     full_lon = [p.lon for p in r.smooth_points]
@@ -143,7 +99,6 @@ def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, route_profiles: 
         traces_data = {}
         
         for segment in segment_profile.segments:
-                        
             if segment.feature_type in color_map:
                 seg_type = segment.feature_type
             elif segment.gradient_type in color_map:
@@ -163,11 +118,23 @@ def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, route_profiles: 
                 }
             
             segment_points = r.smooth_points[start_idx:end_idx + 1]
+            
+            # Build comprehensive hover info
             hover_info = (
                 f"<b>{seg_type.name.replace('_', ' ').title()}</b><br>"
-                f"Length: {segment.length():.0f}m | "
-                f"Grade: {segment.avg_gradient()*100:.1f}%"
+                f"Length: {segment.length():.0f}m<br>"
+                f"Avg gradient: {segment.avg_gradient()*100:.1f}%<br>"
+                f"Max gradient: {segment.max_gradient()*100:.1f}%"
             )
+            
+            # Add short features if present
+            if segment.short_features:
+                hover_info += "<br><br><b>Short Features:</b>"
+                for feature in segment.short_features:
+                    hover_info += (
+                        f"<br>• {feature.feature_type.name.replace('_', ' ').title()}: "
+                        f"{feature.length:.1f}m, {feature.max_gradient*100:.1f}%"
+                    )
             
             # Add segment points
             traces_data[seg_type]['lon'].extend(p.lon for p in segment_points)

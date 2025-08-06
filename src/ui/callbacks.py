@@ -2,6 +2,7 @@
 from dash import ClientsideFunction, Input, Output, State, callback_context, no_update, html
 import dash
 
+from src.routes import spot
 from src.ui.map_helpers import print_step
 from src.ui.map_visualization import *
 from src.routes.route_processor import RouteProcessor
@@ -207,20 +208,19 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
             return create_checkpoint_card(new_checkpoint, processed_route), new_checkpoint_index, fig
         
         return no_update, no_update, no_update
-            
+                
     @app.callback(
-        Output('elevation-profile', 'figure'),
-        Output('velocity-profile', 'figure'),
-        Output('route-general-info', 'children', allow_duplicate=True),  # Add this output
+        Output('profile-graph', 'figure'),
         Input('selected-route-index', 'data'),
         Input('selected-checkpoint-index', 'data'),
+        Input('graph-selector', 'value'),
         Input('initial-state-trigger', 'data'),
         State('selected-route-index', 'data'),
         prevent_initial_call=True
     )
-    def update_profile_graphs(route_trigger, cp_trigger, initial_trigger, selected_route_index):
+    def update_profile_graph(route_trigger, cp_trigger, graph_type, initial_trigger, selected_route_index):
         """
-        Updates elevation and velocity profile graphs and route info card, handling initial state.
+        Updates the profile graph based on the selected graph type.
         """
         ctx = dash.callback_context
         
@@ -235,8 +235,8 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
                 height=250,
                 margin=dict(l=20, r=20, t=40, b=20)
             )
-            return empty_fig, empty_fig, no_update
-        
+            return empty_fig
+            
         if selected_route_index is None:
             empty_fig = go.Figure()
             empty_fig.update_layout(
@@ -247,7 +247,7 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
                 height=250,
                 margin=dict(l=20, r=20, t=40, b=20)
             )
-            return empty_fig, empty_fig, no_update
+            return empty_fig
         
         # Get route data
         selected_route = spot.routes[selected_route_index]
@@ -266,18 +266,14 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
             and cp_trigger < len(processed_route.checkpoints)):
             highlight_distance = processed_route.checkpoints[cp_trigger].distance_from_origin
         
-        # Create figures
-        elevation_fig = create_elevation_profile_figure(
-            profiles['static'], 
-            highlight_distance
-        )
-        
-        velocity_fig = create_velocity_profile_figure(
-            profiles['dynamic'], 
-            highlight_distance
-        )
-        
-        # Create enhanced route info card
-        route_info_card = create_route_info_card(selected_route, processed_route, profiles['segments'])
-        
-        return elevation_fig, velocity_fig, route_info_card
+        # Create the appropriate figure based on selection
+        if graph_type == 'elevation':
+            return create_elevation_profile_figure(
+                profiles['static'], 
+                highlight_distance
+            )
+        else:  # velocity
+            return create_velocity_profile_figure(
+                profiles['dynamic'], 
+                highlight_distance
+            )

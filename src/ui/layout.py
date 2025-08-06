@@ -16,6 +16,12 @@ def setup_layout(spot: Spot):
         )
     )
 
+    # Panel dimensions and positioning
+    right_panel_width = '35%'
+    right_panel_max_width = '600px'
+    graph_panel_height = '25vh'
+    right_panel_bottom_margin = '30vh'  # Extra space to prevent overlap
+
     layout = dbc.Container([
         # Full-screen map
         dcc.Graph(
@@ -36,65 +42,74 @@ def setup_layout(spot: Spot):
             # Right-side panel (route selection and info)
             html.Div([
                 dbc.Card([
-                    dbc.CardHeader("Выбор маршрута", className="font-weight-bold py-2"),
+                    dbc.CardHeader("Маршрут", className="font-weight-bold py-2"),
                     dbc.CardBody([
+                        # Route selector
                         dcc.Dropdown(
                             id='route-selector',
                             options=[],
                             placeholder="Выберите маршрут",
-                            className="mb-2"
-                        )
+                            className="mb-3"
+                        ),
+                        
+                        # Route information
+                        html.Div(id='route-general-info', className="mb-3"),
+                        
+                        # Checkpoint information
+                        html.Div(id='checkpoint-info')
                     ], className="py-2")
-                ], className="mb-2", style={'background-color': 'rgba(255, 255, 255, 0.85)'}),
-                
-                dbc.Card([
-                    dbc.CardHeader("Информация о маршруте", className="font-weight-bold py-2"),
-                    dbc.CardBody([
-                        html.Div(id='route-general-info')
-                    ], className="py-2")
-                ], className="mb-2", style={'background-color': 'rgba(255, 255, 255, 0.85)'}),
-                
-                dbc.Card([
-                    dbc.CardHeader("Информация о чекпоинте", className="font-weight-bold py-2"),
-                    dbc.CardBody(id='checkpoint-info', className="py-2")
-                ], style={'background-color': 'rgba(255, 255, 255, 0.85)'})
+                ], style={
+                    'background-color': 'rgba(255, 255, 255, 0.85)',
+                    'height': f'calc(100vh - 40px - {graph_panel_height})',
+                    'overflow-y': 'auto'
+                })
             ], style={
                 'position': 'fixed',
                 'top': '20px',
                 'right': '20px',
-                'width': '35%',
-                'max-width': '600px',
+                'width': right_panel_width,
+                'max-width': right_panel_max_width,
                 'z-index': '1',
-                'overflow-y': 'auto',
-                'max-height': 'calc(100vh - 40px)'
+                'bottom': right_panel_bottom_margin
             }),
             
-            # Bottom panel (graphs)
+            # Bottom panel (single graph with selector)
             html.Div([
                 dbc.Row([
                     dbc.Col(
-                        dcc.Graph(
-                            id='elevation-profile', 
-                            style={'height': '100%', 'width': '100%'}
+                        dbc.RadioItems(
+                            id='graph-selector',
+                            options=[
+                                {'label': 'Elevation', 'value': 'elevation'},
+                                {'label': 'Velocity', 'value': 'velocity'}
+                            ],
+                            value='elevation',
+                            inline=True,
+                            className="me-2",
+                            style={
+                                'padding': '5px',
+                                'margin-left': '10px',
+                                'font-size': '0.9rem'
+                            }
                         ),
-                        width=6,
-                        style={'padding': '0 5px'}
+                        width=2,
+                        style={'padding-right': '0'}
                     ),
                     dbc.Col(
                         dcc.Graph(
-                            id='velocity-profile', 
+                            id='profile-graph',
                             style={'height': '100%', 'width': '100%'}
                         ),
-                        width=6,
-                        style={'padding': '0 5px'}
+                        width=10,
+                        style={'padding-left': '0'}
                     )
-                ], style={'margin': '0'})
+                ], style={'height': '100%', 'margin': '0'})
             ], style={
                 'position': 'fixed',
                 'bottom': '20px',
                 'left': '20px',
-                'right': '20px',
-                'height': '25vh',
+                'right': f'calc({right_panel_width} + 40px)',
+                'height': graph_panel_height,
                 'background-color': 'rgba(255, 255, 255, 0.85)',
                 'border-radius': '5px',
                 'padding': '10px',

@@ -41,12 +41,27 @@ class TrailFeatureType(Enum):
     TECHNICAL_DESCENT = auto()
     TECHNICAL_ASCENT = auto()
     FLOW_DESCENT = auto()
-    DROP_SECTION = auto()
-    # New feature types
-    SHORT_ASCENT = auto()       # Rapid one-time ascent
-    SHORT_DESCENT = auto()      # Rapid one-time descent
-    STEP_UP = auto()            # Very short, steep ascent
-    STEP_DOWN = auto()          # Very short, steep descent
+    KICKER = auto()
+    DROP = auto()
+
+class ShortFeature:
+    """Represents a short, challenging trail feature with its characteristics"""
+    def __init__(self, 
+                 feature_type: TrailFeatureType,
+                 start_index: int,
+                 end_index: int,
+                 max_gradient: float,
+                 length: float):
+        self.feature_type = feature_type
+        self.start_index = start_index
+        self.end_index = end_index
+        self.max_gradient = max_gradient
+        self.length = length
+
+    def __repr__(self):
+        return (f"ShortFeature({self.feature_type.name}, "
+                f"start={self.start_index}, end={self.end_index}, "
+                f"max_grad={self.max_gradient:.1%}, length={self.length:.1f}m)")
 
 class ElevationSegment:
             
@@ -57,10 +72,6 @@ class ElevationSegment:
     
     # Feature classification parameters
     STEP_FEATURE_MAX_LENGTH = 15        # meters
-    SHORT_FEATURE_MIN_LENGTH = 15       # meters
-    SHORT_FEATURE_MAX_LENGTH = 50       # meters
-    SHORT_ASCENT_MIN_GRADIENT = 0.08    # 8%
-    SHORT_DESCENT_MAX_GRADIENT = -0.08  # -8%
     
     # Technical section parameters
     TECHNICAL_GRADIENT_STD_THRESHOLD = 0.05  # Standard deviation threshold
@@ -82,7 +93,7 @@ class ElevationSegment:
     wavelengths : List[float]
     distances : List[float]
     gradients : List[float]
-    short_features : List[TrailFeatureType]
+    short_features: List[ShortFeature]
     
     def __init__(self, 
                  start_idx: int, 
@@ -103,27 +114,7 @@ class ElevationSegment:
         self.gradients = [gradient]
         self.wavelengths = []
         self.riding_context = "GENERIC"
-        self.short_features = []  # New list to store short, steep features       
-        
-    def determine_riding_context(self, segments, index):
-        """Updated to check both gradient and feature types"""
-        # Check if part of sustained climb
-        if (self.gradient_type in [GradientSegmentType.ASCENT, GradientSegmentType.STEEP_ASCENT] and
-            any(s.gradient_type == self.gradient_type 
-                for s in segments[max(0,index-2):min(len(segments),index+3)])):
-            return "ENDURANCE"
-            
-        # Check technical descent chain
-        if (self.feature_type in [TrailFeatureType.TECHNICAL_DESCENT, TrailFeatureType.DROP_SECTION] and
-            any(s.feature_type in [TrailFeatureType.TECHNICAL_DESCENT, TrailFeatureType.DROP_SECTION]
-                for s in segments[max(0,index-1):min(len(segments),index+2)])):
-            return "TECHNICAL"
-            
-        # Flow section detection
-        if self.feature_type == TrailFeatureType.FLOW_DESCENT:
-            return "FLOW"
-            
-        return "GENERIC"
+        self.short_features = []  # New list to store short, steep features               
         
     def extend(self, 
                     end_idx: int,

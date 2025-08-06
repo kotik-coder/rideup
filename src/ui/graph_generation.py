@@ -63,21 +63,25 @@ def calculate_velocity_quartiles(velocities):
     q3 = np.percentile(velocities_np, 75)
     return q1, median, q3
 
-def create_elevation_profile_figure(profile : StaticProfile,
+def create_elevation_profile_figure(profile: StaticProfile,
                                   highlight_distance: Optional[float] = None) -> go.Figure:
-    """Create elevation profile with baseline and median reference."""
+    """Create elevation profile with baseline, median reference, and gradient visualization."""
     fig = go.Figure()
     
-    distances   = [p.distance_from_origin for p in profile.points]
-    elevations  = [p.elevation for p in profile.points]
-    baselines   = [p.baseline for p in profile.points]
+    distances = [p.distance_from_origin for p in profile.points]
+    elevations = [p.elevation for p in profile.points]
+    baselines = [p.baseline for p in profile.points]
+    gradients = [p.gradient * 100 for p in profile.points]  # Convert to percentage
     
     has_baseline = len(baselines) == len(profile.points)    
     
     # Calculate median elevation
     median_elevation = np.median(elevations) if elevations else 0
     
-    # Main elevation line
+    # Create figure with secondary y-axis
+    fig = go.Figure()
+    
+    # Main elevation line (primary y-axis)
     fig.add_trace(go.Scatter(
         x=distances,
         y=elevations,
@@ -89,7 +93,23 @@ def create_elevation_profile_figure(profile : StaticProfile,
             smoothing=1.3
         ),
         name='Elevation',
-        showlegend=True
+        yaxis='y1'
+    ))
+
+    # Gradient line (secondary y-axis)
+    fig.add_trace(go.Scatter(
+        x=distances,
+        y=gradients,
+        mode='lines',
+        line=dict(
+            color='rgba(255, 100, 0, 0.7)',  # Orange
+            width=2,
+            shape='spline',
+            smoothing=1.3,
+            dash='dot'
+        ),
+        name='Gradient',
+        yaxis='y2'
     ))
 
     if has_baseline:
@@ -106,18 +126,18 @@ def create_elevation_profile_figure(profile : StaticProfile,
                 smoothing=1.3
             ),
             name='Baseline',
-            showlegend=True
+            yaxis='y1'
         ))
 
         # Unified fill between elevation and baseline
         fig.add_trace(go.Scatter(
-            x=np.concatenate([distances, distances[::-1]]),  # Forward then backward
-            y=np.concatenate([elevations, baselines[::-1]]),  # Elevation forward, baseline backward
+            x=np.concatenate([distances, distances[::-1]]),
+            y=np.concatenate([elevations, baselines[::-1]]),
             fill='toself',
             fillcolor='rgba(100, 180, 255, 0.3)',  # Light blue
             line=dict(width=0),
             name='Oscillations',
-            showlegend=True
+            yaxis='y1'
         ))
 
     # Median reference line
@@ -129,7 +149,21 @@ def create_elevation_profile_figure(profile : StaticProfile,
             dash='dot'
         ),
         annotation_text=f"Median: {median_elevation:.1f}m",
-        annotation_position="bottom right"
+        annotation_position="bottom right",
+        yref='y1'
+    )
+
+    # Zero gradient reference line
+    fig.add_hline(
+        y=0,
+        line=dict(
+            color='rgba(255, 100, 0, 0.5)',
+            width=1,
+            dash='dot'
+        ),
+        annotation_text="0% grade",
+        annotation_position="top right",
+        yref='y2'
     )
 
     # Shadow effect under main line
@@ -143,7 +177,8 @@ def create_elevation_profile_figure(profile : StaticProfile,
             shape='spline',
             smoothing=1.3
         ),
-        showlegend=False
+        showlegend=False,
+        yaxis='y1'
     ))
 
     if highlight_distance is not None:
@@ -157,32 +192,36 @@ def create_elevation_profile_figure(profile : StaticProfile,
                 color='gold',
                 line=dict(width=2, color='black')
             ),
-            showlegend=False
+            showlegend=False,
+            yaxis='y1'
         ))
 
     fig.update_layout(
         xaxis_title='Distance (m)',
-        yaxis_title='Elevation (m)',
-        margin=dict(l=20, r=20, t=40, b=20),
+        yaxis=dict(
+            title='Elevation (m)',
+            showgrid=True,
+            gridcolor='rgba(200, 200, 200, 0.2)',
+            linecolor='rgba(200, 200, 200, 0.8)'
+        ),
+        yaxis2=dict(
+            title='Gradient (%)',
+            overlaying='y',
+            side='right',
+            showgrid=False,
+            range=[min(gradients + [-20]), max(gradients + [20])],  # Add buffer
+            linecolor='rgba(255, 100, 0, 0.7)'
+        ),
+        margin=dict(l=20, r=60, t=40, b=20),  # Increased right margin for second axis
         height=250,
         plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',  # Added this line for transparency
+        paper_bgcolor='rgba(0,0,0,0)',
         legend=dict(
             orientation="h",
             yanchor="bottom",
             y=1.02,
             xanchor="right",
             x=1
-        ),
-        xaxis=dict(
-            showgrid=True,
-            gridcolor='rgba(200, 200, 200, 0.2)',
-            linecolor='rgba(200, 200, 200, 0.8)'
-        ),
-        yaxis=dict(
-            showgrid=True,
-            gridcolor='rgba(200, 200, 200, 0.2)',
-            linecolor='rgba(200, 200, 200, 0.8)'
         )
     )
     return fig

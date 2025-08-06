@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.cluster import DBSCAN
 from src.routes.route_processor import ProcessedRoute
 from src.routes.route import GeoPoint
-from src.routes.trail_features import ElevationSegment, GradientSegmentType, TrailFeatureType
+from src.routes.trail_features import ElevationSegment, GradientSegmentType, ShortFeature, TrailFeatureType
 from src.routes.trail_features import TrailFeatureType as tft
 from src.routes.trail_features import GradientSegmentType as gst
 
@@ -197,58 +197,73 @@ class SegmentProfile:
                 profile.classify_roller(seg, route)
             
             # Analyze actual gradient trends for local features
-            if seg.feature_type is None:  # Only classify if no feature detected yet
-                self._classify_local_features(seg)
+            self._classify_local_features(seg)
         
         self._post_process_segments()
 
     def _classify_local_features(self, segment: ElevationSegment):
         """Analyze stored gradient trends to identify local features"""
         gradients = np.array(segment.gradients)
+        distances = np.array(segment.distances)
         avg_gradient = segment.avg_gradient()
-        max_gradient = np.max(gradients)
-        min_gradient = np.min(gradients)
         gradient_std = np.std(gradients)
-        segment_length = segment.length()
         
-        # Check for very short, steep features (steps)
-        if segment_length < ElevationSegment.STEP_FEATURE_MAX_LENGTH:
-            if max_gradient > gst.STEEP_ASCENT.min_grad:
-                segment.short_features.append((segment.start_index, segment.end_index, tft.STEP_UP))
-            elif min_gradient < gst.STEEP_DESCENT.max_grad:
-                segment.short_features.append((segment.start_index, segment.end_index, tft.STEP_DOWN))
+        # Calculate thresholds for extreme gradients (2 sigma)
+        upper_threshold = avg_gradient + (2 * gradient_std)
+        lower_threshold = avg_gradient - (2 * gradient_std)
         
-        # Check for short but significant climbs/descents (only steep ones)
-        if (ElevationSegment.SHORT_FEATURE_MIN_LENGTH <= segment_length <= 
-            ElevationSegment.SHORT_FEATURE_MAX_LENGTH):
+        # Identify extreme gradient points
+        extreme_points = np.where(
+            (gradients > upper_threshold) | (gradients < lower_threshold)
+        )[0]
+        
+        # Group consecutive extreme points into features
+        extreme_features = []
+        if len(extreme_points) > 0:
+            current_start = extreme_points[0]
+            for i in range(1, len(extreme_points)):
+                if extreme_points[i] != extreme_points[i-1] + 1:
+                    # End of current feature
+                    extreme_features.append((current_start, max(extreme_points[i-1], current_start + 1) ))
+                    current_start = extreme_points[i]
+            extreme_features.append((current_start, max(current_start + 1, extreme_points[-1]) ))
+        
+        # Classify extreme features
+        for start_idx, end_idx in extreme_features:
+            end_idx = min(len(extreme_features), end_idx)
+            if end_idx < start_idx:
+                start_idx = end_idx - 1
+            # Calculate feature length using distances instead of indices
+            feature_length = distances[end_idx] - distances[start_idx]
+            feature_gradients = gradients[start_idx:end_idx+1]
+            avg_feature_gradient = np.mean(feature_gradients)
+            max_feature_gradient = np.max(feature_gradients) if avg_feature_gradient > 0 else np.min(feature_gradients)
             
-            elevation_change = abs(avg_gradient * segment_length)
-            
-            # Only consider steep features
-            if (avg_gradient > ElevationSegment.SHORT_ASCENT_MIN_GRADIENT and
-                elevation_change > ElevationSegment.MIN_ELEVATION_CHANGE and
-                avg_gradient > gst.ASCENT.min_grad):  # Must be steeper than regular ascent
-                segment.short_features.append((segment.start_index, segment.end_index, tft.SHORT_ASCENT))
-            elif (avg_gradient < ElevationSegment.SHORT_DESCENT_MAX_GRADIENT and
-                elevation_change > ElevationSegment.MIN_ELEVATION_CHANGE and
-                avg_gradient < gst.DESCENT.max_grad):  # Must be steeper than regular descent
-                segment.short_features.append((segment.start_index, segment.end_index, tft.SHORT_DESCENT))
-        
-        # Check for technical sections (existing logic remains)
-        if segment_length >= ElevationSegment.TECHNICAL_LENGTH_THRESHOLD:
-            if (gradient_std > ElevationSegment.TECHNICAL_GRADIENT_STD_THRESHOLD or
-                abs(avg_gradient) > ElevationSegment.TECHNICAL_AVG_GRADE_THRESHOLD):
-                if avg_gradient > 0:
-                    segment.feature_type = tft.TECHNICAL_ASCENT
-                else:
-                    segment.feature_type = tft.TECHNICAL_DESCENT
+            # Check for very short, steep features (steps)
+            if feature_length < ElevationSegment.STEP_FEATURE_MAX_LENGTH:
+                if avg_feature_gradient > gst.STEEP_ASCENT.min_grad:
+                    ftr_type = tft.KICKER
+                elif avg_feature_gradient < gst.STEEP_DESCENT.max_grad:
+                    ftr_type = tft.DROP
+                else: 
+                    continue
+                
+                segment.short_features.append(
+                    ShortFeature(
+                        ftr_type,
+                        start_index=segment.start_index + start_idx,
+                        end_index=segment.start_index + end_idx,
+                        max_gradient=max_feature_gradient,
+                        length=feature_length  # Now using correct distance-based length
+                    )
+                )                
     
     def _post_process_segments(self):
         """Phase 1 post-processing focused on ride context"""
         
-        for i, seg in enumerate(self.segments):
+        #for i, seg in enumerate(self.segments):
             # Tag segments with riding context
-            seg.riding_context = seg.determine_riding_context(self.segments, i)
+            #seg.riding_context = seg.determine_riding_context(self.segments, i)
 
     def _identify_baseline_trends(self, profile: StaticProfile):
         """Identifies continuous segments with consistent gradient characteristics"""        
