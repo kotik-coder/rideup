@@ -1,11 +1,8 @@
 
 from enum import Enum, auto
-from tkinter import FLAT
 from typing import List, Optional
 
 import numpy as np
-
-from src.routes.route_processor import ProcessedRoute
 
 class GradientSegmentType(Enum):
     """Segment types defined purely by elevation gradient"""
@@ -85,8 +82,8 @@ class ElevationSegment:
     wavelengths : List[float]
     distances : List[float]
     gradients : List[float]
+    short_features : List[TrailFeatureType]
     
-    """Represents a continuous segment of similar elevation characteristics"""
     def __init__(self, 
                  start_idx: int, 
                  gradient_type: GradientSegmentType,
@@ -105,7 +102,8 @@ class ElevationSegment:
         self.distances = [distance]
         self.gradients = [gradient]
         self.wavelengths = []
-        self.riding_context = "GENERIC"  # Also good practice to initialize this            
+        self.riding_context = "GENERIC"
+        self.short_features = []  # New list to store short, steep features       
         
     def determine_riding_context(self, segments, index):
         """Updated to check both gradient and feature types"""

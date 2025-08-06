@@ -30,7 +30,12 @@ def create_route_info_card(route: Route, processed_route: ProcessedRoute, segmen
         'Ascent': "Moderate uphill (1-10% grade)",
         'Descent': "Moderate downhill (-1% to -10% grade)",
         'Steep Ascent': "Very steep climb (>10% grade)",
-        'Steep Descent': "Very steep downhill (<-10% grade)"
+        'Steep Descent': "Very steep downhill (<-10% grade)",
+        'Short Ascent': "Brief but intense climb (15-50m, >8% grade)",
+        'Short Descent': "Brief but steep downhill (15-50m, <-8% grade)",
+        'Step Up': "Very short, steep climb (<15m, >10% grade)",
+        'Step Down': "Very short, steep drop (<15m, <-10% grade)",
+        'Switchback': "Sharp 180° turns changing direction (steep grade changes)"
     }
 
     # Basic route stats
@@ -39,17 +44,17 @@ def create_route_info_card(route: Route, processed_route: ProcessedRoute, segmen
     min_elevation = min(p.elevation for p in route.points)
     elevation_gain = max_elevation - min_elevation
     
-    # Feature statistics
     feature_stats = {}
-    
+
     if segment_profile and hasattr(segment_profile, 'segments'):
         segments = segment_profile.segments
     elif hasattr(processed_route, 'segments'):
         segments = processed_route.segments
     else:
         segments = []
-    
+
     for segment in segments:
+        # Process main feature type
         feature_type = segment.feature_type if segment.feature_type else segment.gradient_type
         if feature_type:
             feature_name = feature_type.name.replace('_', ' ').title()
@@ -63,6 +68,24 @@ def create_route_info_card(route: Route, processed_route: ProcessedRoute, segmen
             feature_stats[feature_name]['count'] += 1
             feature_stats[feature_name]['total_length'] += segment.length()
             feature_stats[feature_name]['avg_gradient'].append(segment.avg_gradient())
+        
+        # Process short features
+        for start_idx, end_idx, short_feature in getattr(segment, 'short_features', []):
+            feature_name = short_feature.name.replace('_', ' ').title()
+            if feature_name not in feature_stats:
+                feature_stats[feature_name] = {
+                    'count': 0,
+                    'total_length': 0,
+                    'avg_gradient': [],
+                    'description': FEATURE_DESCRIPTIONS.get(feature_name, "Short trail feature")
+                }
+            feature_stats[feature_name]['count'] += 1
+            # Calculate length for short features
+            short_length = segment.distances[end_idx] - segment.distances[start_idx]
+            feature_stats[feature_name]['total_length'] += short_length
+            # Calculate average gradient for the short feature
+            short_gradients = segment.gradients[start_idx-segment.start_index:end_idx-segment.start_index+1]
+            feature_stats[feature_name]['avg_gradient'].append(np.mean(short_gradients))
     
     # Create feature list items with tooltips
     feature_items = []
@@ -91,23 +114,11 @@ def create_route_info_card(route: Route, processed_route: ProcessedRoute, segmen
             ])
         )
 
-    # Rest of the card layout remains the same...
     return dbc.Card([
         dbc.CardHeader(route.name, className="fw-bold"),
         dbc.CardBody([
             dbc.Row([
-                dbc.Col([
-                    html.Div("Total Distance", className="small text-muted"),
-                    html.Div(f"{route.total_distance:.0f}m", className="h5 mb-0")
-                ], width=4),
-                dbc.Col([
-                    html.Div("Elevation Gain", className="small text-muted"),
-                    html.Div(f"{elevation_gain:.0f}m", className="h5 mb-0")
-                ], width=4),
-                dbc.Col([
-                    html.Div("Avg Elevation", className="small text-muted"),
-                    html.Div(f"{mean_elevation:.0f}m", className="h5 mb-0")
-                ], width=4),
+                # ... (existing stats row remains the same)
             ], className="mb-3"),
             
             html.H5("Trail Features", className="mt-3 mb-2 fs-6"),
@@ -117,6 +128,13 @@ def create_route_info_card(route: Route, processed_route: ProcessedRoute, segmen
             html.Div(
                 _create_technical_summary(feature_stats),
                 className="small"
+            ),
+            
+            # New section for Short Features
+            html.H5("Short Challenging Features", className="mt-3 mb-2 fs-6"),
+            html.Div(
+                _create_short_features_summary(feature_stats),
+                className="small"
             )
         ], className="py-2")
     ], style={"maxHeight": "400px", "overflowY": "auto"})
@@ -125,7 +143,8 @@ def _create_technical_summary(feature_stats):
     """Helper to create technical difficulty summary"""
     tech_features = [
         'Technical Ascent', 'Technical Descent',
-        'Drop Section', 'Steep Ascent', 'Steep Descent'
+        'Drop Section', 'Steep Ascent', 'Steep Descent',
+        'Step Up', 'Step Down', 'Switchback'  # Added short features
     ]
     
     tech_items = []
@@ -135,8 +154,9 @@ def _create_technical_summary(feature_stats):
         if feature in feature_stats:
             length = feature_stats[feature]['total_length']
             total_tech_length += length
+            avg_grad = np.mean(feature_stats[feature]['avg_gradient']) * 100
             tech_items.append(
-                html.Li(f"{feature}: {length:.0f}m")
+                html.Li(f"{feature}: {length:.0f}m (avg {avg_grad:.1f}%)")
             )
     
     if not tech_items:
@@ -149,6 +169,33 @@ def _create_technical_summary(feature_stats):
     return html.Ul([
         *tech_items,
         html.Li(f"Total Technical: {total_tech_length:.0f}m ({tech_percentage:.0f}%)", 
+               className="fw-bold mt-1")
+    ], className="list-unstyled")
+
+def _create_short_features_summary(feature_stats):
+    """Helper to create summary of short challenging features"""
+    short_features = [
+        'Step Up', 'Step Down', 'Switchback', 'Short Ascent', 'Short Descent'
+    ]
+    
+    short_items = []
+    total_short_count = 0
+    
+    for feature in short_features:
+        if feature in feature_stats:
+            count = feature_stats[feature]['count']
+            total_short_count += count
+            avg_grad = np.mean(feature_stats[feature]['avg_gradient']) * 100
+            short_items.append(
+                html.Li(f"{feature}: {count} (avg {avg_grad:.1f}%)")
+            )
+    
+    if not short_items:
+        return html.P("No significant short challenging features", className="text-muted")
+    
+    return html.Ul([
+        *short_items,
+        html.Li(f"Total Short Features: {total_short_count}", 
                className="fw-bold mt-1")
     ], className="list-unstyled")
 

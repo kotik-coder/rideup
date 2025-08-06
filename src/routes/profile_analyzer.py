@@ -204,7 +204,6 @@ class SegmentProfile:
 
     def _classify_local_features(self, segment: ElevationSegment):
         """Analyze stored gradient trends to identify local features"""
-        # Calculate statistics from stored gradients
         gradients = np.array(segment.gradients)
         avg_gradient = segment.avg_gradient()
         max_gradient = np.max(gradients)
@@ -215,32 +214,30 @@ class SegmentProfile:
         # Check for very short, steep features (steps)
         if segment_length < ElevationSegment.STEP_FEATURE_MAX_LENGTH:
             if max_gradient > gst.STEEP_ASCENT.min_grad:
-                segment.feature_type = tft.STEP_UP
+                segment.short_features.append((segment.start_index, segment.end_index, tft.STEP_UP))
             elif min_gradient < gst.STEEP_DESCENT.max_grad:
-                segment.feature_type = tft.STEP_DOWN
-            return
+                segment.short_features.append((segment.start_index, segment.end_index, tft.STEP_DOWN))
         
-        # Check for short but significant climbs/descents
+        # Check for short but significant climbs/descents (only steep ones)
         if (ElevationSegment.SHORT_FEATURE_MIN_LENGTH <= segment_length <= 
             ElevationSegment.SHORT_FEATURE_MAX_LENGTH):
             
-            # Calculate elevation change using avg gradient and length
             elevation_change = abs(avg_gradient * segment_length)
             
+            # Only consider steep features
             if (avg_gradient > ElevationSegment.SHORT_ASCENT_MIN_GRADIENT and
-                elevation_change > ElevationSegment.MIN_ELEVATION_CHANGE):
-                segment.feature_type = tft.SHORT_ASCENT
+                elevation_change > ElevationSegment.MIN_ELEVATION_CHANGE and
+                avg_gradient > gst.ASCENT.min_grad):  # Must be steeper than regular ascent
+                segment.short_features.append((segment.start_index, segment.end_index, tft.SHORT_ASCENT))
             elif (avg_gradient < ElevationSegment.SHORT_DESCENT_MAX_GRADIENT and
-                elevation_change > ElevationSegment.MIN_ELEVATION_CHANGE):
-                segment.feature_type = tft.SHORT_DESCENT
-            return
+                elevation_change > ElevationSegment.MIN_ELEVATION_CHANGE and
+                avg_gradient < gst.DESCENT.max_grad):  # Must be steeper than regular descent
+                segment.short_features.append((segment.start_index, segment.end_index, tft.SHORT_DESCENT))
         
-        # Check for technical sections
+        # Check for technical sections (existing logic remains)
         if segment_length >= ElevationSegment.TECHNICAL_LENGTH_THRESHOLD:
-            # High variability or consistently steep
             if (gradient_std > ElevationSegment.TECHNICAL_GRADIENT_STD_THRESHOLD or
                 abs(avg_gradient) > ElevationSegment.TECHNICAL_AVG_GRADE_THRESHOLD):
-                
                 if avg_gradient > 0:
                     segment.feature_type = tft.TECHNICAL_ASCENT
                 else:
