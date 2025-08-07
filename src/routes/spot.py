@@ -100,18 +100,30 @@ class Spot:
         self.terrain = None  # Will hold TerrainAnalysis object
         self._load_terrain_data()  # New terrain loading
         print_step("Spot", f"Spot '{self.name}' initialized with bounds: {self.bounds}")
-                
+                    
     def _recommend_bike_type(self, surface: str, traction: float) -> str:
-        """Suggest suitable bike type based on terrain"""
-        if traction > 0.7:
-            return "XC/Race"
+        """Suggest suitable bike type based on terrain analysis.
+        Args:
+            surface: Dominant surface type (e.g., 'gravel', 'rock').
+            traction: Composite score (0-1) from terrain weights.
+        Returns:
+            str: Bike type recommendation.
+        """
+        if surface == "sand":
+            return "Fat Bike (4.5\"+ tires or wider)"
+        elif surface == "mud":
+            return "Fat Bike or Enduro (mud tires)"
+        elif traction > 0.75:
+            return "Road/Gravel Bike"  # Smooth asphalt/concrete
+        elif traction > 0.6:
+            return "XC/Hardtail"       # Compacted gravel/dirt
         elif traction > 0.45:
-            return "Trail/All-Mountain"
-        elif surface in ["sand", "mud"]:
-            return "Fat Bike"
+            return "Trail/All-Mountain"  # Rough but rideable
+        elif surface == "rock":
+            return "Enduro/DH (2.4\"+ tires)"
         else:
-            return "Enduro/DH"
-
+            return "Enduro/DH (full suspension)"
+        
     def _load_terrain_data(self):
         """Simplified terrain loading using TerrainLoader"""
         self.terrain = TerrainLoader.load_terrain(self.geostring, self.polygon)
