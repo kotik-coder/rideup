@@ -4,14 +4,15 @@ import osmnx as ox
 from shapely import MultiPolygon, Polygon
 
 # Assuming these are available in your project structure
-from src.iio.weather_advice import WeatherAdvisor, WeatherData
-from src.iio.terrain_loader import TerrainAnalysis, TerrainLoader
+from src.iio.weather_advice import WeatherAdvisor
+from src.iio.terrain_loader import TerrainLoader
 from src.routes.route_processor import ProcessedRoute, RouteProcessor
 from src.ui.map_helpers import print_step
 from src.iio.gpx_loader import LocalGPXLoader # Assuming LocalGPXLoader is within gpx_loader
 from src.routes.route import Route
 from src.iio.spot_photo import SpotPhoto
 from src.routes.track import Track
+from src.routes.terrain_and_weather import *
 
 @dataclass
 class RatingSystem:
@@ -72,6 +73,7 @@ class Spot:
     tracks: List[Track]  # Tracks now contain their route reference
     polygon: any
     terrain: TerrainAnalysis
+    weather: WeatherData
 
     def __init__(self, geostring: str, system_config: Optional[Dict] = None, weather_api_key: Optional[str] = None):
         self.system = RatingSystem.create(system_config)
@@ -99,6 +101,12 @@ class Spot:
             print_step("Weather Advice", advice)
         
         print_step("Spot", f"Spot '{self.name}' initialized with bounds: {self.bounds}")
+
+    def get_traction(self):
+        if self.weather:
+            return self.terrain.get_adjusted_traction(self.weather)
+        else:
+            return self.terrain.traction_score
 
     def load_weather_data(self, api_key: Optional[str] = None) -> Optional[WeatherData]:
         """
@@ -159,12 +167,6 @@ class Spot:
                     self.terrain.surface_types.items(),
                     key=lambda x: -x[1]
                 )
-            )
-            print_step("Terrain",
-                f"Trail Surfaces:\n{surface_report}\n"
-                f"Dominant: {self.terrain.dominant_surface}\n"
-                f"Traction: {self.terrain.traction_score:.0%}\n"
-                f"Recommended bike type: {self._recommend_bike_type(self.terrain.dominant_surface, self.terrain.traction_score)}"
             )
 
     def get_processed_route(self, rp : RouteProcessor, route : Route, selected_index : int) -> ProcessedRoute:

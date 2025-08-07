@@ -1,39 +1,9 @@
 # terrain_loader.py
 import osmnx as ox
-from typing import Dict
+from typing import Dict, Optional
 from dataclasses import dataclass
 from src.ui.map_helpers import print_step
-
-@dataclass 
-class TerrainAnalysis:
-    surface_types: Dict[str, float]
-    dominant_surface: str
-    traction_score: float
-    
-    # Surface weights and icons remain the same
-    SURFACE_WEIGHTS = {
-        # High-traction
-        'asphalt': 0.9, 'concrete': 0.85, 'paved': 0.8, 'cobblestone': 0.75,
-        # Medium-traction
-        'compacted': 0.7, 'fine_gravel': 0.65, 'gravel': 0.6, 
-        'ground': 0.55, 'pebblestone': 0.5,
-        # Low-traction
-        'dirt': 0.45, 'grass': 0.4, 'sand': 0.3, 'mud': 0.2, 'wood': 0.35,
-        # Special cases
-        'rock': 0.4, 'metal': 0.3, 'snow': 0.1
-    }
-
-    surface_icons = {
-        # High-traction
-        'asphalt': '▁', 'concrete': '▂', 'paved': '▂', 'cobblestone': '▃',
-        # Medium-traction
-        'compacted': '▃', 'fine_gravel': '▄', 'gravel': '▄', 
-        'ground': '▅', 'pebblestone': '▅',
-        # Low-traction
-        'dirt': '▅', 'grass': '▆', 'sand': '▇', 'mud': '▇', 'wood': '▆',
-        # Special cases
-        'rock': '█', 'metal': '▂', 'snow': '❄️'
-    }
+from src.routes.terrain_and_weather import TerrainAnalysis
     
 class TerrainLoader:
     @staticmethod

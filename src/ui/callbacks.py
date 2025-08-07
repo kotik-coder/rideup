@@ -305,34 +305,44 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         # Update visibility states based on which button was clicked
         if triggered_id == 'right-panel-toggle':
             right_visible = not right_visible
-            # Special behavior: when opening right panel, restore both cards if both are hidden
+            # When opening right panel, restore both cards if both are hidden
             if right_visible and not (spot_visible or route_visible):
                 spot_visible = True
                 route_visible = True
         elif triggered_id == 'spot-info-toggle':
             spot_visible = not spot_visible
+            # If maximizing spot, minimize route and vice versa
+            if spot_visible and route_visible:
+                route_visible = False
         elif triggered_id == 'route-info-toggle':
             route_visible = not route_visible
+            # If maximizing route, minimize spot and vice versa
+            if route_visible and spot_visible:
+                spot_visible = False
         elif triggered_id == 'bottom-panel-toggle':
             bottom_visible = not bottom_visible
 
         # Calculate dynamic heights based on visibility
         if spot_visible and route_visible:
-            # Both visible - split space equally
-            spot_height = '50%'
-            route_height = '50%'
+            # Both visible - split space equally with 20px margin between
+            spot_height = 'calc(50% - 10px)'
+            route_height = 'calc(50% - 10px)'
+            margin_between = '10px'
         elif spot_visible:
-            # Only spot info visible - take full height
-            spot_height = '100%'
-            route_height = '0'
+            # Only spot info visible - take full height minus header
+            spot_height = 'calc(100% - 45px)'  # 45px accounts for header height
+            route_height = '45px'  # Just show the header
+            margin_between = '0'
         elif route_visible:
-            # Only route info visible - take full height
-            spot_height = '0'
-            route_height = '100%'
+            # Only route info visible - take full height minus header
+            spot_height = '45px'  # Just show the header
+            route_height = 'calc(100% - 45px)'
+            margin_between = '0'
         else:
-            # Both hidden (shouldn't happen when right panel is visible)
-            spot_height = '0'
-            route_height = '0'
+            # Both minimized - just show headers
+            spot_height = '45px'
+            route_height = '45px'
+            margin_between = '0'
 
         # Create styles based on visibility states
         right_style = {
@@ -342,29 +352,27 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
             'width': '35%',
             'max-width': '600px',
             'z-index': '1',
-            'bottom': '30vh',
+            'bottom': '20px',  # Full height
             'transition': 'all 0.3s ease'
         }
         right_icon = html.I(className="fas fa-chevron-left" if right_visible else "fas fa-chevron-right")
 
         spot_style = {
             'background-color': 'rgba(255, 255, 255, 0.85)',
-            'margin-bottom': '10px',
-            'display': 'block',
+            'margin-bottom': margin_between,
             'height': spot_height,
-            'overflow-y': 'auto',
+            'overflow-y': 'auto' if spot_height != '45px' else 'hidden',
             'transition': 'all 0.3s ease'
         }
-        spot_icon = html.I(className="fas fa-minus" if spot_visible else "fas fa-plus")
+        spot_icon = html.I(className="fas fa-window-maximize" if spot_height == '45px' else "fas fa-window-minimize")
 
         route_style = {
             'background-color': 'rgba(255, 255, 255, 0.85)',
             'height': route_height,
-            'overflow-y': 'auto',
-            'display': 'block',
+            'overflow-y': 'auto' if route_height != '45px' else 'hidden',
             'transition': 'all 0.3s ease'
         }
-        route_icon = html.I(className="fas fa-minus" if route_visible else "fas fa-plus")
+        route_icon = html.I(className="fas fa-window-maximize" if route_height == '45px' else "fas fa-window-minimize")
 
         bottom_style = {
             'position': 'fixed',

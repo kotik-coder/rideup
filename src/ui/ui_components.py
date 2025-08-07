@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List
 import dash_bootstrap_components as dbc
 from dash import html, dcc
@@ -10,7 +10,6 @@ from src.routes.trail_features import ElevationSegment
 from src.routes.route import Route
 from src.routes.route_processor import ProcessedRoute
 from src.ui.trail_style import get_arrow_size, get_feature_color, get_feature_description, get_feature_name, get_gradient_direction
-from src.iio.terrain_loader import TerrainAnalysis
 
 def create_spot_info_card(spot: Spot):
     """Compact spot card with enhanced weather display"""
@@ -27,6 +26,14 @@ def create_spot_info_card(spot: Spot):
         total_routes = len(spot.routes)
         total_distance = sum(r.total_distance for r in spot.routes) / 1000
         
+        # Calculate adjusted traction if weather data exists
+        base_traction = spot.terrain.traction_score
+        traction = spot.get_traction()
+        
+        # Determine if we should highlight the adjusted score
+        traction_difference = abs(base_traction - traction)
+        show_adjusted = spot.weather and traction_difference > 0.05  # Only show if significant difference
+        
         # Surface composition list
         surface_list = []
         if spot.terrain.surface_types:
@@ -40,6 +47,20 @@ def create_spot_info_card(spot: Spot):
             for i in range(len(surface_list)-1, 0, -1):
                 surface_list.insert(i, html.Span(", ", className="mx-1"))
 
+        # Build traction display
+        traction_display = []
+        if show_adjusted:
+            traction_display.extend([
+                html.Span(f"{base_traction:.0%}", className="text-muted"),
+                html.Span(" → ", className="mx-1"),
+                html.Span(f"{traction:.0%}", 
+                         style={'color': '#1f77b4', 'font-weight': 'bold'})
+            ])
+        else:
+            traction_display.append(
+                html.Span(f"{base_traction:.0%}")
+            )
+
         # Enhanced weather section
         weather_section = []
         if spot.weather:
@@ -52,9 +73,18 @@ def create_spot_info_card(spot: Spot):
                 "Strong wind"
             )
             
-            # Update recency indicator (moved to bottom)
-            last_updated = (datetime.now() - spot.weather.last_updated).total_seconds()/3600
-            recency = "🟢" if last_updated < 1 else "🟡" if last_updated < 3 else "🔴"
+            last_updated_utc = spot.weather.last_updated
+            last_updated_local = last_updated_utc.astimezone()
+            
+            # Calculate age correctly
+            current_utc = datetime.now(timezone.utc)
+            hours_old = (current_utc - last_updated_utc).total_seconds() / 3600
+            
+            recency = ("🟢" if hours_old < 1 else 
+                    "🟡" if hours_old < 3 else 
+                    "🔴")
+            
+            local_time = last_updated_local.strftime('%Y-%m-%d %H:%M')
             
             # Format weather advice with line breaks
             weather_advice = spot.get_weather_advice()
@@ -89,12 +119,12 @@ def create_spot_info_card(spot: Spot):
                                 html.Small("Precipitation (mm)", className="text-muted d-block text-center"),
                                 dbc.Row([
                                     dbc.Col([
-                                        html.Div("3h", className="small text-muted text-center"),
-                                        html.Div(f"{spot.weather.precipitation_last_3h:.1f}", className="text-center")
+                                        html.Div("3d", className="small text-muted text-center"),
+                                        html.Div(f"{spot.weather.precipitation_last_3days:.1f}", className="text-center")
                                     ], width=4),
                                     dbc.Col([
                                         html.Div("Now", className="small text-muted text-center"),
-                                        html.Div(f"{spot.weather.precipitation_last_3h:.1f}", className="text-center")  # Using same as current
+                                        html.Div(f"{spot.weather.precipitation_now:.1f}", className="text-center")
                                     ], width=4),
                                     dbc.Col([
                                         html.Div("Next 8h", className="small text-muted text-center"),
@@ -119,7 +149,7 @@ def create_spot_info_card(spot: Spot):
                 ]),
                 html.Div([
                     html.Small(
-                        f"{recency} Updated: {spot.weather.last_updated.strftime('%Y-%m-%d %H:%M')}",
+                        f"{recency} Updated: {local_time}",
                         className="text-muted d-block text-end"
                     )
                 ], className="mt-1")
@@ -136,21 +166,20 @@ def create_spot_info_card(spot: Spot):
                     ], width=4),
                     dbc.Col([
                         html.Small("Traction", className="text-muted d-block"), 
-                        f"{spot.terrain.traction_score:.0%}"
+                        html.Div(traction_display)
                     ], width=4),
                     dbc.Col([
                         html.Small("Recommended Bike", className="text-muted d-block"),
                         html.Div(
                             spot._recommend_bike_type(
                                 spot.terrain.dominant_surface,
-                                spot.terrain.traction_score
+                                traction
                             ),
-                            className="small"  # Made text smaller to fit
+                            className="small"
                         )
                     ], width=4)
                 ], className="mb-3"),
                 
-                # Rest of the card remains the same...
                 # Surface composition
                 html.Div([
                     html.Span("Surface Composition:", className="text-muted d-block mb-1"),
