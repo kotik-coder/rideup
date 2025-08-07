@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import List
 import dash_bootstrap_components as dbc
 from dash import html, dcc
@@ -5,105 +6,181 @@ import numpy as np
 import plotly.graph_objects as go
 
 from src.routes.spot import Spot
-from src.routes.trail_features import ElevationSegment, TrailFeatureType
-from src.routes.profile_analyzer import SegmentProfile
+from src.routes.trail_features import ElevationSegment
 from src.routes.route import Route
 from src.routes.route_processor import ProcessedRoute
-from src.ui.trail_style import get_arrow_size, get_feature_color, get_feature_description, get_feature_name, get_gradient_direction, get_segment_name
-
-from dash import dash_table
-from dash.dash_table.Format import Format, Scheme
+from src.ui.trail_style import get_arrow_size, get_feature_color, get_feature_description, get_feature_name, get_gradient_direction
+from src.iio.terrain_loader import TerrainAnalysis
 
 def create_spot_info_card(spot: Spot):
-    """Compact spot card showing top 5 surface types"""
+    """Compact spot card with enhanced weather display"""
+    card_children = [
+        dbc.CardHeader(spot.name, className="font-weight-bold py-2")
+    ]
+
     if not spot.terrain:
-        return dbc.Card([
-            dbc.CardHeader("Spot Overview", className="font-weight-bold py-2"),
-            dbc.CardBody([
-                html.H5(spot.name, className="mb-0")
-            ])
-        ])
-
-    total_routes = len(spot.routes)
-    total_distance = sum(r.total_distance for r in spot.routes) / 1000
-
-    # Prepare top 5 surface indicators
-    surface_rows = []
-    if spot.terrain.surface_types:
-        surfaces = sorted(
-            spot.terrain.surface_types.items(),
-            key=lambda x: -x[1]
-        )[:5]  # Top 5 surfaces
+        card_children.append(
+            dbc.CardBody([html.P("No terrain data available", className="text-muted mb-0")])
+        )
+    else:
+        # Prepare terrain data
+        total_routes = len(spot.routes)
+        total_distance = sum(r.total_distance for r in spot.routes) / 1000
         
-        for surface, percent in surfaces:
-            icon = spot.terrain.surface_icons.get(surface.lower(), '▪')
-            surface_rows.append(
-                dbc.Row([
-                    dbc.Col(
-                        html.Span(f"{icon} {surface.capitalize()}", 
-                                className="text-muted"),
-                        width=6, className="pe-0"
-                    ),
-                    dbc.Col(
-                        html.Div(f"{percent:.0%}", 
-                                className="text-end"),
-                        width=6, className="ps-0"
-                    )
-                ], className="g-0 mb-1")
-            )
+        # Surface composition list
+        surface_list = []
+        if spot.terrain.surface_types:
+            surfaces = sorted(spot.terrain.surface_types.items(), key=lambda x: -x[1])[:5]
+            surface_list = [
+                html.Span([
+                    html.Span(spot.terrain.surface_icons.get(surface.lower(), '▪'), className="me-1"),
+                    f"{surface.capitalize()} ({percent:.0%})"
+                ]) for surface, percent in surfaces
+            ]
+            for i in range(len(surface_list)-1, 0, -1):
+                surface_list.insert(i, html.Span(", ", className="mx-1"))
 
-    return dbc.Card([
-        dbc.CardHeader("Spot Overview", className="font-weight-bold py-2"),
-        dbc.CardBody([
-            # Spot name and primary stats
-            html.H5(spot.name, className="mb-2"),
+        # Enhanced weather section
+        weather_section = []
+        if spot.weather:
+            # Wind description
+            wind_speed = spot.weather.wind_speed
+            wind_desc = (
+                "Calm" if wind_speed < 0.5 else
+                "Light breeze" if wind_speed < 3.3 else
+                "Moderate breeze" if wind_speed < 5.5 else 
+                "Strong wind"
+            )
             
-            dbc.Row([
-                dbc.Col([
-                    html.Small("Primary Surface", className="text-muted d-block"),
-                    f"{spot.terrain.dominant_surface.capitalize()}"
-                ], width=6),
-                dbc.Col([
-                    html.Small("Traction", className="text-muted d-block"), 
-                    f"{spot.terrain.traction_score:.0%}"
-                ], width=6)
-            ], className="mb-2"),
+            # Update recency indicator (moved to bottom)
+            last_updated = (datetime.now() - spot.weather.last_updated).total_seconds()/3600
+            recency = "🟢" if last_updated < 1 else "🟡" if last_updated < 3 else "🔴"
             
-            # Recommended bike
-            html.Small("Recommended Bike", className="text-muted d-block"),
-            html.Div(
-                spot._recommend_bike_type(
-                    spot.terrain.dominant_surface,
-                    spot.terrain.traction_score
-                ),
-                className="mb-3"
-            ),
+            # Format weather advice with line breaks
+            weather_advice = spot.get_weather_advice()
+            advice_items = [html.Div(item) for item in weather_advice.split('\n') if item]
             
-            # Surface composition header
-            html.Div([
-                html.Span("Surface Composition", className="text-muted"),
-                html.Span(f" (Top 5)", className="text-muted")
-            ], className="small mb-1"),
-            
-            # Surface types - now showing 5
-            html.Div(surface_rows, className="mb-2"),
-            
-            # Route stats
-            dbc.Row([
-                dbc.Col([
-                    html.Small("Total Routes", className="text-muted d-block"),
-                    str(total_routes)
-                ], width=6),
-                dbc.Col([
-                    html.Small("Total Distance", className="text-muted d-block"),
-                    f"{total_distance:.1f} km"
-                ], width=6)
-            ])
-        ], className="py-2")
-    ], style={
-        'background-color': 'rgba(255, 255, 255, 0.95)',
-        'font-size': '0.9rem'
-    })
+            weather_section = [
+                html.Hr(className="my-2"),
+                dbc.Row([
+                    dbc.Col([
+                        html.Small("Current Conditions", className="text-muted d-block"),
+                        html.Div([
+                            html.Img(
+                                src=spot.weather.icon_url,
+                                style={'height': '24px', 'margin-right': '8px'}
+                            ),
+                            spot.weather.condition,
+                        ], className="d-flex align-items-center")
+                    ], width=6),
+                    dbc.Col([
+                        html.Small("Temperature", className="text-muted d-block"),
+                        f"{spot.weather.temperature:.1f}°C"
+                    ], width=6)
+                ], className="mb-2"),
+                dbc.Row([
+                    dbc.Col([
+                        html.Small("Wind Speed", className="text-muted d-block"),
+                        f"{wind_speed:.1f} m/s ({wind_desc})"
+                    ], width=6),
+                    dbc.Col([
+                        dbc.Row([
+                            dbc.Col([
+                                html.Small("Precipitation (mm)", className="text-muted d-block text-center"),
+                                dbc.Row([
+                                    dbc.Col([
+                                        html.Div("3h", className="small text-muted text-center"),
+                                        html.Div(f"{spot.weather.precipitation_last_3h:.1f}", className="text-center")
+                                    ], width=4),
+                                    dbc.Col([
+                                        html.Div("Now", className="small text-muted text-center"),
+                                        html.Div(f"{spot.weather.precipitation_last_3h:.1f}", className="text-center")  # Using same as current
+                                    ], width=4),
+                                    dbc.Col([
+                                        html.Div("Next 8h", className="small text-muted text-center"),
+                                        html.Div(f"{sum(f['precip'] for f in spot.weather.hourly_forecast):.1f}", className="text-center")
+                                    ], width=4)
+                                ], className="g-0")
+                            ], width=12)
+                        ], className="mb-2")
+                    ], width=6)
+                ], className="mb-2"),
+                html.Div([
+                    html.Small("Riding Advice", className="text-muted d-block mb-1"),
+                    html.Div(
+                        advice_items,
+                        className="p-2",
+                        style={
+                            'background-color': '#f8f9fa',
+                            'border-radius': '4px',
+                            'font-size': '0.85rem'
+                        }
+                    )
+                ]),
+                html.Div([
+                    html.Small(
+                        f"{recency} Updated: {spot.weather.last_updated.strftime('%Y-%m-%d %H:%M')}",
+                        className="text-muted d-block text-end"
+                    )
+                ], className="mt-1")
+            ]
+
+        # Build card body with reorganized primary stats
+        card_children.append(
+            dbc.CardBody([
+                # Primary stats in 3 columns
+                dbc.Row([
+                    dbc.Col([
+                        html.Small("Primary Surface", className="text-muted d-block"),
+                        f"{spot.terrain.dominant_surface.capitalize()}"
+                    ], width=4),
+                    dbc.Col([
+                        html.Small("Traction", className="text-muted d-block"), 
+                        f"{spot.terrain.traction_score:.0%}"
+                    ], width=4),
+                    dbc.Col([
+                        html.Small("Recommended Bike", className="text-muted d-block"),
+                        html.Div(
+                            spot._recommend_bike_type(
+                                spot.terrain.dominant_surface,
+                                spot.terrain.traction_score
+                            ),
+                            className="small"  # Made text smaller to fit
+                        )
+                    ], width=4)
+                ], className="mb-3"),
+                
+                # Rest of the card remains the same...
+                # Surface composition
+                html.Div([
+                    html.Span("Surface Composition:", className="text-muted d-block mb-1"),
+                    html.Div(surface_list, className="d-inline")
+                ], className="small mb-3"),
+                
+                # Route stats
+                dbc.Row([
+                    dbc.Col([
+                        html.Small("Total Routes", className="text-muted d-block"),
+                        str(total_routes)
+                    ], width=6),
+                    dbc.Col([
+                        html.Small("Total Distance", className="text-muted d-block"),
+                        f"{total_distance:.1f} km"
+                    ], width=6)
+                ]),
+                
+                # Weather section
+                *weather_section
+            ], className="py-2")
+        )
+
+    return dbc.Card(
+        card_children,
+        style={
+            'background-color': 'rgba(255, 255, 255, 0.95)',
+            'font-size': '0.9rem'
+        }
+    )
 
 def create_route_info_card(route: Route, processed_route: ProcessedRoute, route_data: dict):
     """Optimized card with difficulty rating and enhanced elevation display"""

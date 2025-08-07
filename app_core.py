@@ -15,21 +15,23 @@ class BitsevskyMapApp:
     
     spot : Spot
     route_processor : RouteProcessor
-    
+        
     def _configure_server(self):
-        # Configure Dash to be quieter
-        self.app = dash.Dash(__name__,
-                          external_stylesheets=[dbc.themes.BOOTSTRAP],
-                          suppress_callback_exceptions=True)
-
+        assets_path = os.getcwd() + '/assets'
+        
+        # Create single Dash instance with all configurations
+        self.app = dash.Dash(
+            __name__,
+            external_stylesheets=[dbc.themes.BOOTSTRAP, "https://use.fontawesome.com/releases/v5.15.4/css/all.css"],
+            suppress_callback_exceptions=True,
+            assets_folder=assets_path,
+        )
+        
         # Disable Dash devtools verbose logging
         if not DEBUG:
             log = logging.getLogger('werkzeug')
             log.setLevel(logging.ERROR)
             self.app.logger.setLevel(logging.WARNING)
-            
-        assets_path = os.getcwd() +'/assets'
-        app = dash.Dash(__name__,assets_folder=assets_path)
     
     def __init__(self):
         self._configure_server()
@@ -53,7 +55,8 @@ class BitsevskyMapApp:
         print_step("Core", "Creating spot")
         # Initialize Spot with proper parameters
         self.spot = Spot(
-            geostring="Битцевский лес, Москва"
+            geostring="Битцевский лес, Москва",
+            weather_api_key="18e37b7ae267bb45bfca6676e7ae072f"
         )                
         
         print_step("Core", "Creating route processor")

@@ -1,14 +1,11 @@
-import requests
-import tempfile
-import rasterio
-from rasterstats import zonal_stats
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
 import osmnx as ox
 from shapely import MultiPolygon, Polygon
 
 # Assuming these are available in your project structure
-from src.iio.terrain_loader import TerrainLoader
+from src.iio.weather_advice import WeatherAdvisor, WeatherData
+from src.iio.terrain_loader import TerrainAnalysis, TerrainLoader
 from src.routes.route_processor import ProcessedRoute, RouteProcessor
 from src.ui.map_helpers import print_step
 from src.iio.gpx_loader import LocalGPXLoader # Assuming LocalGPXLoader is within gpx_loader
@@ -61,14 +58,6 @@ class RatingSystem:
         
         return system
 
-@dataclass 
-class TerrainAnalysis:
-    """Stores terrain type information for a spot"""
-    surface_types: Dict[str, float]  # Surface type distribution (e.g., {'dirt': 0.6, 'gravel': 0.3})
-    landcover_types: Dict[str, float]  # ESA WorldCover classification
-    dominant_trail_surface: str
-    traction_score: float  # 0-1 estimate of overall traction
-
 @dataclass
 class Spot:
     name: str
@@ -84,11 +73,11 @@ class Spot:
     polygon: any
     terrain: TerrainAnalysis
 
-    def __init__(self, geostring: str, system_config: Optional[Dict] = None):
-        self.system = RatingSystem.create(system_config)  # Add this line
+    def __init__(self, geostring: str, system_config: Optional[Dict] = None, weather_api_key: Optional[str] = None):
+        self.system = RatingSystem.create(system_config)
         self.name = geostring
         self.geostring = geostring
-        self._photos_loaded = False # Internal flag to prevent redundant photo loading
+        self._photos_loaded = False
         self.local_photos = []
         self.routes = []
         self.tracks = []
@@ -97,9 +86,43 @@ class Spot:
         self._get_bounds(geostring)
         self.load_valid_routes_and_tracks()
         self.local_photos = SpotPhoto.load_local_photos(self.bounds)
-        self.terrain = None  # Will hold TerrainAnalysis object
-        self._load_terrain_data()  # New terrain loading
+        self.terrain = None
+        self._load_terrain_data()
+        self.weather = None
+        
+        # Initialize weather (will try Roshydromet first, then OpenWeatherMap if key provided)
+        self.load_weather_data(weather_api_key)
+        
+        # Print weather advice if available
+        if self.weather:
+            advice = self.get_weather_advice()
+            print_step("Weather Advice", advice)
+        
         print_step("Spot", f"Spot '{self.name}' initialized with bounds: {self.bounds}")
+
+    def load_weather_data(self, api_key: Optional[str] = None) -> Optional[WeatherData]:
+        """
+        Load current weather conditions for this spot.
+        Args:
+            api_key: Optional OpenWeatherMap API key (uses Roshydromet if None)
+        Returns:
+            WeatherData object if successful, None otherwise
+        """
+        self.weather = WeatherAdvisor.get_current_weather(self.bounds, api_key)
+        if self.weather:
+            print_step("Weather", 
+                f"Current conditions: {self.weather.condition}\n"
+                f"Temperature: {self.weather.temperature}°C\n"
+                f"Wind: {self.weather.wind_speed} m/s\n"
+            )
+        return self.weather
+        
+    def get_weather_advice(self) -> str:
+        """
+        Get riding advice based on current weather and terrain conditions.
+        Returns formatted string with emoji indicators.
+        """
+        return WeatherAdvisor.generate_riding_advice(self.weather, self.terrain)
                     
     def _recommend_bike_type(self, surface: str, traction: float) -> str:
         """Suggest suitable bike type based on terrain analysis.

@@ -1,8 +1,7 @@
 # terrain_loader.py
 import osmnx as ox
-from typing import Dict, Optional
-from dataclasses import dataclass, field
-import requests
+from typing import Dict
+from dataclasses import dataclass
 from src.ui.map_helpers import print_step
 
 @dataclass 

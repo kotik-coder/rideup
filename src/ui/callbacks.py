@@ -1,5 +1,5 @@
 # callbacks.py
-from dash import ClientsideFunction, Input, Output, State, callback_context, no_update, html
+from dash import ClientsideFunction, Input, Output, State, callback_context, ctx, no_update, html
 import dash
 
 from src.routes import spot
@@ -217,74 +217,179 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
             # Return the updated checkpoint card, the figure, and the new checkpoint index to store
             return create_checkpoint_card(new_checkpoint, processed_route), new_checkpoint_index, fig
         
-        return no_update, no_update, no_update
-                
+        return no_update, no_update, no_update               
+
     @app.callback(
         Output('profile-graph', 'figure'),
+        Output('bottom-panel-container', 'style', allow_duplicate=True),
         Input('selected-route-index', 'data'),
         Input('selected-checkpoint-index', 'data'),
         Input('graph-selector', 'value'),
-        Input('initial-state-trigger', 'data'),
-        State('selected-route-index', 'data'),
+        State('bottom-panel-container', 'style'),
         prevent_initial_call=True
     )
-    def update_profile_graph(route_trigger, cp_trigger, graph_type, initial_trigger, selected_route_index):
+    def update_profile_graph(route_index, cp_index, graph_type, current_style):
         """
-        Updates the profile graph based on the selected graph type.
+        Updates both the graph content and maintains its style
         """
-        ctx = dash.callback_context
-        
-        # Initial state handling
-        if not ctx.triggered or ctx.triggered[0]['prop_id'] == 'initial-state-trigger.data':
-            empty_fig = go.Figure()
-            empty_fig.update_layout(
-                plot_bgcolor='rgba(0,0,0,0)',
-                paper_bgcolor='rgba(0,0,0,0)',
-                xaxis=dict(visible=False),
-                yaxis=dict(visible=False),
-                height=250,
-                margin=dict(l=20, r=20, t=40, b=20)
-            )
-            return empty_fig
+        if route_index is None:
+            return go.Figure(), {'height': '100%', 'width': '100%'}
             
-        if selected_route_index is None:
-            empty_fig = go.Figure()
-            empty_fig.update_layout(
-                plot_bgcolor='rgba(0,0,0,0)',
-                paper_bgcolor='rgba(0,0,0,0)',
-                xaxis=dict(visible=False),
-                yaxis=dict(visible=False),
-                height=250,
-                margin=dict(l=20, r=20, t=40, b=20)
-            )
-            return empty_fig
+        selected_route = spot.routes[route_index]
+        processed_route = spot.get_processed_route(route_processor, selected_route, route_index)
         
-        # Get route data
-        selected_route = spot.routes[selected_route_index]
-        processed_route = spot.get_processed_route(route_processor, selected_route, selected_route_index)
-        
-        # Generate profiles
         profiles = generate_route_profiles(
             spot,
             processed_route, 
             [t for t in spot.tracks if t.route == selected_route]
         )
         
-        # Get highlight distance if checkpoint is selected
         highlight_distance = None
-        if (cp_trigger is not None 
+        if (cp_index is not None 
             and processed_route.checkpoints 
-            and cp_trigger < len(processed_route.checkpoints)):
-            highlight_distance = processed_route.checkpoints[cp_trigger].distance_from_origin
+            and cp_index < len(processed_route.checkpoints)):
+            highlight_distance = processed_route.checkpoints[cp_index].distance_from_origin
         
-        # Create the appropriate figure based on selection
         if graph_type == 'elevation':
-            return create_elevation_profile_figure(
-                profiles['static'], 
-                highlight_distance
-            )
-        else:  # velocity
-            return create_velocity_profile_figure(
-                profiles['dynamic'], 
-                highlight_distance
-            )
+            fig = create_elevation_profile_figure(profiles['static'], highlight_distance)
+        else:
+            fig = create_velocity_profile_figure(profiles['dynamic'], highlight_distance)
+            
+        current_style.update({
+            'height': '25vh',  # Fixed height when visible
+            'display': 'flex',  # Ensure flex layout is maintained
+            'flex-direction': 'column',
+            'padding': '0'
+        })
+        
+        return fig, current_style
+
+    @app.callback(
+        Output('right-panel', 'style'),
+        Output('right-panel-toggle', 'children'),
+        Output('spot-info-card', 'style'),
+        Output('spot-info-toggle', 'children'),
+        Output('route-info-card', 'style'),
+        Output('route-info-toggle', 'children'),
+        Output('bottom-panel-container', 'style'),
+        Output('bottom-panel-toggle', 'children'),
+        Output('right-panel-state', 'data'),
+        Output('spot-info-state', 'data'),
+        Output('route-info-state', 'data'),
+        Output('bottom-panel-state', 'data'),
+        Input('right-panel-toggle', 'n_clicks'),
+        Input('spot-info-toggle', 'n_clicks'),
+        Input('route-info-toggle', 'n_clicks'),
+        Input('bottom-panel-toggle', 'n_clicks'),
+        State('right-panel-state', 'data'),
+        State('spot-info-state', 'data'),
+        State('route-info-state', 'data'),
+        State('bottom-panel-state', 'data'),
+        State('bottom-panel-container', 'style'),
+        prevent_initial_call=True
+    )
+    def handle_all_panel_toggles(
+        right_clicks, spot_clicks, route_clicks, bottom_clicks,
+        right_state, spot_state, route_state, bottom_state,
+        bottom_panel_style
+    ):
+        # Get current visibility states
+        right_visible = right_state['visible']
+        spot_visible = spot_state['visible']
+        route_visible = route_state['visible']
+        bottom_visible = bottom_state['visible']
+
+        # Determine which button was clicked
+        triggered_id = ctx.triggered_id if ctx.triggered else None
+        
+        # Update visibility states based on which button was clicked
+        if triggered_id == 'right-panel-toggle':
+            right_visible = not right_visible
+            # Special behavior: when opening right panel, restore both cards if both are hidden
+            if right_visible and not (spot_visible or route_visible):
+                spot_visible = True
+                route_visible = True
+        elif triggered_id == 'spot-info-toggle':
+            spot_visible = not spot_visible
+        elif triggered_id == 'route-info-toggle':
+            route_visible = not route_visible
+        elif triggered_id == 'bottom-panel-toggle':
+            bottom_visible = not bottom_visible
+
+        # Calculate dynamic heights based on visibility
+        if spot_visible and route_visible:
+            # Both visible - split space equally
+            spot_height = '50%'
+            route_height = '50%'
+        elif spot_visible:
+            # Only spot info visible - take full height
+            spot_height = '100%'
+            route_height = '0'
+        elif route_visible:
+            # Only route info visible - take full height
+            spot_height = '0'
+            route_height = '100%'
+        else:
+            # Both hidden (shouldn't happen when right panel is visible)
+            spot_height = '0'
+            route_height = '0'
+
+        # Create styles based on visibility states
+        right_style = {
+            'position': 'fixed',
+            'top': '20px',
+            'right': '20px' if right_visible else '-35%',
+            'width': '35%',
+            'max-width': '600px',
+            'z-index': '1',
+            'bottom': '30vh',
+            'transition': 'all 0.3s ease'
+        }
+        right_icon = html.I(className="fas fa-chevron-left" if right_visible else "fas fa-chevron-right")
+
+        spot_style = {
+            'background-color': 'rgba(255, 255, 255, 0.85)',
+            'margin-bottom': '10px',
+            'display': 'block',
+            'height': spot_height,
+            'overflow-y': 'auto',
+            'transition': 'all 0.3s ease'
+        }
+        spot_icon = html.I(className="fas fa-minus" if spot_visible else "fas fa-plus")
+
+        route_style = {
+            'background-color': 'rgba(255, 255, 255, 0.85)',
+            'height': route_height,
+            'overflow-y': 'auto',
+            'display': 'block',
+            'transition': 'all 0.3s ease'
+        }
+        route_icon = html.I(className="fas fa-minus" if route_visible else "fas fa-plus")
+
+        bottom_style = {
+            'position': 'fixed',
+            'bottom': '20px',
+            'left': '20px',
+            'right': f'calc(35% + 40px)' if right_visible else '20px',
+            'height': '25vh' if bottom_visible else '0',
+            'background-color': 'rgba(255, 255, 255, 0.95)',
+            'border-radius': '8px',
+            'box-shadow': '0 2px 10px rgba(0,0,0,0.1)',
+            'z-index': '1',
+            'overflow': 'hidden',
+            'transition': 'all 0.3s ease',
+            'display': 'flex',
+            'flex-direction': 'column'
+        }
+        bottom_icon = html.I(className="fas fa-chevron-down" if bottom_visible else "fas fa-chevron-up")
+
+        return (
+            right_style, right_icon,
+            spot_style, spot_icon,
+            route_style, route_icon,
+            bottom_style, bottom_icon,
+            {'visible': right_visible},
+            {'visible': spot_visible},
+            {'visible': route_visible},
+            {'visible': bottom_visible}
+        )
