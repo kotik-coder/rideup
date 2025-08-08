@@ -7,21 +7,34 @@ class WeatherData:
     temperature: float  # in Celsius
     condition: str      # e.g., "Rain", "Snow"
     wind_speed: float   # in m/s
-    precipitation_last_3days: float  # in mm
-    precipitation_now: float  # in mm
+    precipitation_last_3days: float  # in mm (accumulated)
+    precipitation_now: float  # in mm/hour (current rate)
+    precipitation_forecast_max: float  # in mm/hour (max in next 8 hours)
     last_updated: datetime
     icon_url: str       # URL to weather icon
     hourly_forecast: List[Dict]  # Forecast for next 8 hours
     
     @property
     def precipitation_classification(self) -> Dict[str, bool]:
-        """Classifies precipitation levels for European Russia"""
+        """Classifies precipitation levels using multiple metrics"""
         return {
-            'very_heavy': self.precipitation_last_3days > 40,  # >40mm in 3 days
-            'heavy': 25 < self.precipitation_last_3days <= 40,  # 25-40mm
-            'moderate': 15 < self.precipitation_last_3days <= 25,  # 15-25mm
-            'some': 5 < self.precipitation_last_3days <= 15,  # 5-15mm
-            'light': self.precipitation_last_3days <= 5  # <5mm
+            # Current precipitation rate classification
+            'current_rate_violent': self.precipitation_now > 50,
+            'current_rate_heavy': 10 <= self.precipitation_now <= 50,
+            'current_rate_moderate': 2.5 <= self.precipitation_now < 10,
+            'current_rate_light': 0.1 < self.precipitation_now < 2.5,
+            
+            # Forecasted max precipitation rate
+            'forecast_violent': self.precipitation_forecast_max > 50,
+            'forecast_heavy': 10 <= self.precipitation_forecast_max <= 50,
+            'forecast_moderate': 2.5 <= self.precipitation_forecast_max < 10,
+            'forecast_light': 0.1 < self.precipitation_forecast_max < 2.5,
+            
+            # Historical precipitation (3-day accumulated)
+            'historical_very_heavy': self.precipitation_last_3days > 100,
+            'historical_heavy': 50 < self.precipitation_last_3days <= 100,
+            'historical_moderate': 25 < self.precipitation_last_3days <= 50,
+            'historical_light': 1 < self.precipitation_last_3days <= 25
         }
 
 @dataclass 
@@ -69,7 +82,6 @@ class TerrainAnalysis:
         }
     }
 
-
     surface_icons = {
         # High-traction
         'asphalt': '▁', 'concrete': '▂', 'paved': '▂', 'cobblestone': '▃',
@@ -81,11 +93,12 @@ class TerrainAnalysis:
         # Special cases
         'rock': '█', 'metal': '▂', 'snow': '❄️'
     }
-        
+            
     def get_adjusted_traction(self, weather: Optional[WeatherData] = None) -> float:
         """
         Calculate weather-adjusted traction score (0-1) accounting for:
         - Current weather conditions
+        - Precipitation rates (current and forecast)
         - Recent precipitation history
         - Surface-specific multipliers
         """
@@ -94,7 +107,7 @@ class TerrainAnalysis:
         if not weather:
             return base_score
             
-        # Determine weather severity based on current and historical precipitation
+        # Determine weather severity based on multiple factors
         condition = 'dry'
         current_weather = weather.condition.lower()
         precip_class = weather.precipitation_classification
@@ -107,14 +120,27 @@ class TerrainAnalysis:
         # Get appropriate multipliers
         multipliers = self.PRECIPITATION_MULTIPLIERS[condition]
         
+        # Apply reduction based on precipitation intensity
+        intensity_adjustment = 1.0
+        if precip_class['current_rate_violent'] or precip_class['forecast_violent']:
+            intensity_adjustment = 0.6  # 40% reduction for violent rain
+        elif precip_class['current_rate_heavy'] or precip_class['forecast_heavy']:
+            intensity_adjustment = 0.75  # 25% reduction for heavy rain
+        elif precip_class['current_rate_moderate'] or precip_class['forecast_moderate']:
+            intensity_adjustment = 0.85   # 15% reduction for moderate rain
+        elif precip_class['current_rate_light'] or precip_class['forecast_light']:
+            intensity_adjustment = 0.95   # 5% reduction for light rain
+        
         # Apply additional reduction based on precipitation history
         historical_adjustment = 1.0
-        if precip_class['very_heavy']:
-            historical_adjustment = 0.7  # 30% reduction for very heavy rain
-        elif precip_class['heavy']:
+        if precip_class['historical_very_heavy']:
+            historical_adjustment = 0.7  # 30% reduction
+        elif precip_class['historical_heavy']:
             historical_adjustment = 0.8   # 20% reduction
-        elif precip_class['moderate']:
+        elif precip_class['historical_moderate']:
             historical_adjustment = 0.9   # 10% reduction
+        elif precip_class['historical_light']:
+            historical_adjustment = 0.95  # 5% reduction for light accumulated rain
         
         # Calculate weighted adjustment based on surface composition
         adjusted_score = 0.0
@@ -125,8 +151,8 @@ class TerrainAnalysis:
             multiplier = multipliers.get(surface_lower, multipliers['default'])
             surface_weight = self.SURFACE_WEIGHTS.get(surface_lower, 0.5)
             
-            # Apply both surface-specific and historical adjustments
-            adjusted_score += (surface_weight * multiplier * historical_adjustment) * proportion
+            # Apply all adjustments (surface-specific, intensity, and historical)
+            adjusted_score += (surface_weight * multiplier * intensity_adjustment * historical_adjustment) * proportion
             total_weight += proportion
             
         if total_weight > 0:

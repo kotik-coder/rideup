@@ -212,8 +212,6 @@ def create_elevation_profile_figure(profile: StaticProfile,
             range=[min(gradients + [-20]), max(gradients + [20])],  # Add buffer
             linecolor='rgba(255, 100, 0, 0.7)'
         ),
-        margin=dict(l=20, r=60, t=40, b=20),  # Increased right margin for second axis
-        height=250,
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
         legend=dict(
@@ -222,7 +220,10 @@ def create_elevation_profile_figure(profile: StaticProfile,
             y=1.02,
             xanchor="right",
             x=1
-        )
+        ),
+        autosize=False,
+        height=200,  # Fixed height
+        margin=dict(l=20, r=60, t=40, b=20),
     )
     return fig
 
@@ -357,8 +358,9 @@ def create_velocity_profile_figure(profile_points: List[TrackAnalysis],
     fig.update_layout(
         xaxis_title='Distance (m)',
         yaxis_title='Velocity (km/h)',
-        margin=dict(l=20, r=20, t=40, b=20),
-        height=250,
+        autosize=False,
+        height=200,  # Fixed height
+        margin=dict(l=20, r=60, t=40, b=20),
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
         xaxis=dict(

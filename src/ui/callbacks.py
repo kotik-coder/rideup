@@ -1,5 +1,6 @@
 # callbacks.py
 from dash import ClientsideFunction, Input, Output, State, callback_context, ctx, no_update, html
+from dash import MATCH
 import dash
 
 from src.routes import spot
@@ -135,7 +136,7 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
     def select_checkpoint(map_figure, cp_index : int):
         if 'data' in map_figure:
             for trace in map_figure['data']:
-                if hasattr(trace, 'name') and trace.name == checkpoints_label:
+                if hasattr(trace, 'name') and trace['name'] == checkpoints_label:
                     trace.selectedpoints = [cp_index]
                     break
     
@@ -168,56 +169,6 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
                 return create_checkpoint_card(checkpoint, processed_route), checkpoint_index
             
         return no_update, no_update
-
-    @app.callback(
-        Output('checkpoint-info', 'children', allow_duplicate=True),
-        Output('selected-checkpoint-index', 'data', allow_duplicate=True), # Output to update the store
-        Output('map-graph', 'figure', allow_duplicate=True),
-        Input('prev-checkpoint-button', 'n_clicks'),
-        Input('next-checkpoint-button', 'n_clicks'),
-        State('selected-route-index', 'data'),
-        State('selected-checkpoint-index', 'data'), # Read current checkpoint index from store
-        State('map-graph', 'figure'),
-        prevent_initial_call=True
-    )
-    def handle_checkpoint_navigation(prev_clicks, next_clicks, selected_route_index, cid, mapf):
-        """
-        Handles navigation between checkpoints using 'Previous' and 'Next' buttons.
-        """
-
-        if selected_route_index is None or cid is None:
-            return no_update, no_update, no_update        
-
-        triggered_id = callback_context.triggered[0]['prop_id'].split('.')[0]
-                
-        selected_route  = spot.routes[selected_route_index]
-        processed_route = spot.get_processed_route(route_processor,
-                                                selected_route,
-                                                selected_route_index)        
-
-        # Get the current selected checkpoint index from the dcc.Store
-        # If the store is None (e.g., on initial load before any selection), default to 0.
-        
-        new_checkpoint_index = cid
-
-        if triggered_id   == 'prev-checkpoint-button' and prev_clicks and prev_clicks > 0:
-            new_checkpoint_index = cid - 1
-        elif triggered_id == 'next-checkpoint-button' and next_clicks and next_clicks > 0:
-            new_checkpoint_index = cid + 1
-
-        # Only update if the index has changed
-        if new_checkpoint_index != cid:            
-
-            print_step("Callbacks", f"Navigating to checkpoint index: {new_checkpoint_index}")
-
-            fig = go.Figure(mapf)
-            select_checkpoint(fig, new_checkpoint_index)
-            new_checkpoint = processed_route.checkpoints[new_checkpoint_index]
-            
-            # Return the updated checkpoint card, the figure, and the new checkpoint index to store
-            return create_checkpoint_card(new_checkpoint, processed_route), new_checkpoint_index, fig
-        
-        return no_update, no_update, no_update               
 
     @app.callback(
         Output('profile-graph', 'figure'),
@@ -259,7 +210,6 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
             'height': '25vh',  # Fixed height when visible
             'display': 'flex',  # Ensure flex layout is maintained
             'flex-direction': 'column',
-            'padding': '0'
         })
         
         return fig, current_style
@@ -293,6 +243,10 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         right_state, spot_state, route_state, bottom_state,
         bottom_panel_style
     ):
+        # Constants for header heights (right panels only)
+        HEADER_HEIGHT = '50px'
+        HEADER_HEIGHT_PX = 50
+        
         # Get current visibility states
         right_visible = right_state['visible']
         spot_visible = spot_state['visible']
@@ -302,49 +256,34 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         # Determine which button was clicked
         triggered_id = ctx.triggered_id if ctx.triggered else None
         
-        # Update visibility states based on which button was clicked
+        # Update visibility states
         if triggered_id == 'right-panel-toggle':
             right_visible = not right_visible
-            # When opening right panel, restore both cards if both are hidden
             if right_visible and not (spot_visible or route_visible):
                 spot_visible = True
                 route_visible = True
         elif triggered_id == 'spot-info-toggle':
             spot_visible = not spot_visible
-            # If maximizing spot, minimize route and vice versa
-            if spot_visible and route_visible:
-                route_visible = False
         elif triggered_id == 'route-info-toggle':
             route_visible = not route_visible
-            # If maximizing route, minimize spot and vice versa
-            if route_visible and spot_visible:
-                spot_visible = False
         elif triggered_id == 'bottom-panel-toggle':
             bottom_visible = not bottom_visible
 
-        # Calculate dynamic heights based on visibility
+        # Calculate right panel heights (with persistent headers)
         if spot_visible and route_visible:
-            # Both visible - split space equally with 20px margin between
-            spot_height = 'calc(50% - 10px)'
-            route_height = 'calc(50% - 10px)'
-            margin_between = '10px'
+            spot_height = f'calc(50% - {HEADER_HEIGHT_PX/2}px)'
+            route_height = f'calc(50% - {HEADER_HEIGHT_PX/2}px)'
         elif spot_visible:
-            # Only spot info visible - take full height minus header
-            spot_height = 'calc(100% - 45px)'  # 45px accounts for header height
-            route_height = '45px'  # Just show the header
-            margin_between = '0'
+            spot_height = f'calc(100% - {HEADER_HEIGHT_PX}px)'
+            route_height = HEADER_HEIGHT
         elif route_visible:
-            # Only route info visible - take full height minus header
-            spot_height = '45px'  # Just show the header
-            route_height = 'calc(100% - 45px)'
-            margin_between = '0'
+            spot_height = HEADER_HEIGHT
+            route_height = f'calc(100% - {HEADER_HEIGHT_PX}px)'
         else:
-            # Both minimized - just show headers
-            spot_height = '45px'
-            route_height = '45px'
-            margin_between = '0'
+            spot_height = HEADER_HEIGHT
+            route_height = HEADER_HEIGHT
 
-        # Create styles based on visibility states
+        # Right panel style - stretches fully to bottom
         right_style = {
             'position': 'fixed',
             'top': '20px',
@@ -352,41 +291,47 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
             'width': '35%',
             'max-width': '600px',
             'z-index': '1',
-            'bottom': '20px',  # Full height
+            'bottom': '20px',  # Changed from 30vh to fixed 20px
             'transition': 'all 0.3s ease'
         }
         right_icon = html.I(className="fas fa-chevron-left" if right_visible else "fas fa-chevron-right")
 
+        # Right panel cards with persistent headers
         spot_style = {
             'background-color': 'rgba(255, 255, 255, 0.85)',
-            'margin-bottom': margin_between,
+            'margin-bottom': '10px',
             'height': spot_height,
-            'overflow-y': 'auto' if spot_height != '45px' else 'hidden',
-            'transition': 'all 0.3s ease'
+            'overflow-y': 'auto' if spot_visible else 'hidden',
+            'transition': 'all 0.3s ease',
+            'border-top': '2px solid #ddd',
+            'position': 'relative'
         }
-        spot_icon = html.I(className="fas fa-window-maximize" if spot_height == '45px' else "fas fa-window-minimize")
+        spot_icon = html.I(className="fas fa-minus" if spot_visible else "fas fa-plus")
 
         route_style = {
             'background-color': 'rgba(255, 255, 255, 0.85)',
             'height': route_height,
-            'overflow-y': 'auto' if route_height != '45px' else 'hidden',
-            'transition': 'all 0.3s ease'
+            'overflow-y': 'auto' if route_visible else 'hidden',
+            'transition': 'all 0.3s ease',
+            'border-top': '2px solid #ddd',
+            'position': 'relative'
         }
-        route_icon = html.I(className="fas fa-window-maximize" if route_height == '45px' else "fas fa-window-minimize")
+        route_icon = html.I(className="fas fa-minus" if route_visible else "fas fa-plus")
 
+        # Bottom panel - completely hides when minimized
         bottom_style = {
             'position': 'fixed',
             'bottom': '20px',
             'left': '20px',
             'right': f'calc(35% + 40px)' if right_visible else '20px',
             'height': '25vh' if bottom_visible else '0',
-            'background-color': 'rgba(255, 255, 255, 0.95)',
+            'background-color': 'rgba(255, 255, 255, 0.85)',
             'border-radius': '8px',
             'box-shadow': '0 2px 10px rgba(0,0,0,0.1)',
             'z-index': '1',
             'overflow': 'hidden',
             'transition': 'all 0.3s ease',
-            'display': 'flex',
+            'display': 'flex' if bottom_visible else 'none',  # Completely hide when minimized
             'flex-direction': 'column'
         }
         bottom_icon = html.I(className="fas fa-chevron-down" if bottom_visible else "fas fa-chevron-up")
@@ -401,3 +346,41 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
             {'visible': route_visible},
             {'visible': bottom_visible}
         )
+                
+    @app.callback(
+        Output({"type": "checkpoint-photo-modal", "index": MATCH}, "is_open"),
+        Input({"type": "checkpoint-photo-thumbnail", "index": MATCH}, "n_clicks"),
+        State({"type": "checkpoint-photo-modal", "index": MATCH}, "is_open"),
+        prevent_initial_call=True
+    )
+    def toggle_photo_modal(n_clicks, is_open):
+        if n_clicks:
+            return not is_open
+        return is_open
+
+    @app.callback(
+        Output('checkpoint-info', 'children', allow_duplicate=True),
+        Output('selected-checkpoint-index', 'data', allow_duplicate=True),
+        Output('map-graph', 'figure', allow_duplicate=True),
+        Input('checkpoint-selector', 'value'),
+        State('selected-route-index', 'data'),
+        State('map-graph', 'figure'),
+        prevent_initial_call=True
+    )
+    def handle_checkpoint_dropdown(selected_index, route_index, current_figure):
+        if selected_index is None or route_index is None:
+            return no_update, no_update, no_update
+            
+        selected_route = spot.routes[route_index]
+        processed_route = spot.get_processed_route(route_processor, selected_route, route_index)
+        
+        if selected_index >= len(processed_route.checkpoints):
+            return no_update, no_update, no_update
+        
+        checkpoint = processed_route.checkpoints[selected_index]
+        
+        # Update the map figure
+        fig = go.Figure(current_figure)
+        select_checkpoint(fig, selected_index)
+        
+        return create_checkpoint_card(checkpoint, processed_route), selected_index, fig

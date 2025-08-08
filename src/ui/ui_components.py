@@ -32,7 +32,6 @@ def create_spot_info_card(spot: Spot):
         
         # Determine if we should highlight the adjusted score
         traction_difference = abs(base_traction - traction)
-        show_adjusted = spot.weather and traction_difference > 0.05  # Only show if significant difference
         
         # Surface composition list
         surface_list = []
@@ -48,23 +47,17 @@ def create_spot_info_card(spot: Spot):
                 surface_list.insert(i, html.Span(", ", className="mx-1"))
 
         # Build traction display
-        traction_display = []
-        if show_adjusted:
-            traction_display.extend([
-                html.Span(f"{base_traction:.0%}", className="text-muted"),
-                html.Span(" → ", className="mx-1"),
-                html.Span(f"{traction:.0%}", 
-                         style={'color': '#1f77b4', 'font-weight': 'bold'})
-            ])
-        else:
-            traction_display.append(
-                html.Span(f"{base_traction:.0%}")
-            )
-
-        # Enhanced weather section
+        traction_display = [
+            html.Span(f"{base_traction:.0%}", className="text-muted"),
+            html.Span(" → ", className="mx-1"),
+            html.Span(f"{traction:.0%}", 
+                        style={'color': '#1f77b4', 'font-weight': 'bold'})
+        ]
+        
+        # Update the weather section in create_spot_info_card function
         weather_section = []
         if spot.weather:
-            # Wind description
+            # Wind description (unchanged)
             wind_speed = spot.weather.wind_speed
             wind_desc = (
                 "Calm" if wind_speed < 0.5 else
@@ -90,6 +83,21 @@ def create_spot_info_card(spot: Spot):
             weather_advice = spot.get_weather_advice()
             advice_items = [html.Div(item) for item in weather_advice.split('\n') if item]
             
+            # New precipitation classification display
+            precip_class = spot.weather.precipitation_classification
+            current_rate = spot.weather.precipitation_now
+            forecast_max = spot.weather.precipitation_forecast_max
+            three_day_total = spot.weather.precipitation_last_3days
+            
+            # Get current precipitation classification
+            current_precip_class = (
+                "Violent" if precip_class['current_rate_violent'] else
+                "Heavy" if precip_class['current_rate_heavy'] else
+                "Moderate" if precip_class['current_rate_moderate'] else
+                "Light" if current_rate > 0 else
+                "None"
+            )
+            
             weather_section = [
                 html.Hr(className="my-2"),
                 dbc.Row([
@@ -100,7 +108,7 @@ def create_spot_info_card(spot: Spot):
                                 src=spot.weather.icon_url,
                                 style={'height': '24px', 'margin-right': '8px'}
                             ),
-                            spot.weather.condition,
+                            f"{spot.weather.condition} ({current_precip_class})",
                         ], className="d-flex align-items-center")
                     ], width=6),
                     dbc.Col([
@@ -114,25 +122,21 @@ def create_spot_info_card(spot: Spot):
                         f"{wind_speed:.1f} m/s ({wind_desc})"
                     ], width=6),
                     dbc.Col([
+                        html.Small("Precipitation", className="text-muted d-block text-center"),
                         dbc.Row([
                             dbc.Col([
-                                html.Small("Precipitation (mm)", className="text-muted d-block text-center"),
-                                dbc.Row([
-                                    dbc.Col([
-                                        html.Div("3d", className="small text-muted text-center"),
-                                        html.Div(f"{spot.weather.precipitation_last_3days:.1f}", className="text-center")
-                                    ], width=4),
-                                    dbc.Col([
-                                        html.Div("Now", className="small text-muted text-center"),
-                                        html.Div(f"{spot.weather.precipitation_now:.1f}", className="text-center")
-                                    ], width=4),
-                                    dbc.Col([
-                                        html.Div("Next 8h", className="small text-muted text-center"),
-                                        html.Div(f"{sum(f['precip'] for f in spot.weather.hourly_forecast):.1f}", className="text-center")
-                                    ], width=4)
-                                ], className="g-0")
-                            ], width=12)
-                        ], className="mb-2")
+                                html.Div("Current", className="small text-muted text-center"),
+                                html.Div(f"{current_rate:.1f} mm/h", className="text-center")
+                            ], width=4),
+                            dbc.Col([
+                                html.Div("Max Forecast", className="small text-muted text-center"),
+                                html.Div(f"{forecast_max:.1f} mm/h", className="text-center")
+                            ], width=4),
+                            dbc.Col([
+                                html.Div("3-Day Total", className="small text-muted text-center"),
+                                html.Div(f"{three_day_total:.1f} mm", className="text-center")
+                            ], width=4)
+                        ], className="g-0")
                     ], width=6)
                 ], className="mb-2"),
                 html.Div([
@@ -425,38 +429,112 @@ def _create_feature_details(feature_stats: dict, format_distance):
     
     return html.Ul(items, className="list-unstyled")
 
-def create_checkpoint_card(checkpoint, route : ProcessedRoute):
+def create_checkpoint_card(checkpoint, route: ProcessedRoute):
     """
-    Generates a Dash Bootstrap Components card for displaying checkpoint information.
-    Now accepts a Checkpoint object instead of a dictionary.
+    Generates a checkpoint card with selectable list and click-to-enlarge photo.
     """
+    # Create list of checkpoint options
+    checkpoint_options = [
+        {'label': cp.name, 'value': i} 
+        for i, cp in enumerate(route.checkpoints)
+    ]
     
-    optional_block = dbc.Col(width=0)
+    current_index = next(
+        (i for i, cp in enumerate(route.checkpoints) if cp == checkpoint),
+        0
+    )
     
-    if checkpoint.photo_html:
-        optional_block = dbc.Col([
-                html.Iframe(
-                    srcDoc=checkpoint.photo_html,
-                    style={'width': '100%', 'height': '220px', 'border': 'none', 'marginBottom': '5px'}
+    # Create modal for enlarged photo
+    photo_modal = dbc.Modal(
+        [
+            dbc.ModalHeader(
+                checkpoint.name,
+                close_button=True,
+                style={'padding': '0.5rem', 'border-bottom': 'none'}
+            ),
+            dbc.ModalBody(
+                html.Div(
+                    style={
+                        'height': '70vh',
+                        'overflow': 'auto',
+                        'padding': '0',
+                        'display': 'flex',
+                        'justify-content': 'center',
+                        'align-items': 'center'
+                    },
+                    children=html.Iframe(
+                        srcDoc=checkpoint.photo_html,
+                        style={
+                            'width': '100%',
+                            'height': '100%',
+                            'border': 'none',
+                            'min-height': '400px'  # Minimum height guarantee
+                        }
+                    ) if checkpoint.photo_html else html.Div("No photo available")
                 )
-            ], width=6)
+            ),
+        ],
+        id={"type": "checkpoint-photo-modal", "index": current_index},
+        size="lg",
+        is_open=False,
+        style={
+            'max-width': '900px',
+            'width': '90%',
+            'padding': '0',
+        },
+        contentClassName="p-0",
+        backdrop=True
+    )
     
     return html.Div([
+        photo_modal,
         dbc.Row([
+            # Checkpoint list column
             dbc.Col([
-                html.H5(f"{checkpoint.name}",
-                       className="card-title mb-1 fs-6"),
-                html.P([html.B("Координаты: "), f"{checkpoint.point.lat:.5f}, {checkpoint.point.lon:.5f}"], className="mb-0", style={'fontSize': '0.9em'}),
-                html.P([html.B("Высота: "), f"{checkpoint.point.elevation:.1f} м"], className="mb-0", style={'fontSize': '0.9em'}),
-                html.P([html.B("Расстояние от старта: "), f"{checkpoint.distance_from_origin:.1f} м"], className="mb-0", style={'fontSize': '0.9em'}),
-                html.P(html.Em(checkpoint.description), className="card-text mb-0", style={'fontSize': '0.9em'})
-            ], width=6),
-            optional_block
-        ], className="g-0"),
-        dbc.Row([
-            dbc.Col(dbc.Button("← Предыдущий", id="prev-checkpoint-button", className="me-2", color="secondary", size="sm"), width={"size": 6, "offset": 0}),
-            dbc.Col(dbc.Button("Следующий →",  id="next-checkpoint-button", className="ms-2", color="secondary", size="sm"), width={"size": 6, "offset": 0})
-        ], className="mt-2 text-center")
+                html.H5("Checkpoints", className="card-title mb-2 fs-6"),
+                dcc.Dropdown(
+                    id='checkpoint-selector',
+                    options=checkpoint_options,
+                    value=current_index,
+                    clearable=False,
+                    style={'fontSize': '0.9em'}
+                )
+            ], width=4),
+            
+            # Checkpoint details column
+            dbc.Col([
+                html.H5(checkpoint.name, className="card-title mb-1 fs-6"),
+                html.P([html.B("Coordinates: "), f"{checkpoint.point.lat:.5f}, {checkpoint.point.lon:.5f}"], 
+                      className="mb-0", style={'fontSize': '0.9em'}),
+                html.P([html.B("Elevation: "), f"{checkpoint.point.elevation:.1f} m"], 
+                      className="mb-0", style={'fontSize': '0.9em'}),
+                html.P([html.B("Distance: "), f"{checkpoint.distance_from_origin:.1f} m"], 
+                      className="mb-0", style={'fontSize': '0.9em'}),
+                html.P(html.Em(checkpoint.description), 
+                      className="card-text mt-2", style={'fontSize': '0.9em'})
+            ], width=5),
+            
+            # Photo column with click handler
+            dbc.Col([
+                html.Div(
+                    html.Div(  # Wrapper div for click handling
+                        html.Iframe(
+                            srcDoc=checkpoint.photo_html,
+                            style={
+                                'width': '100%',
+                                'height': '220px',
+                                'border': 'none',
+                                'pointer-events': 'none'  # Allow clicks to pass through
+                            }
+                        ) if checkpoint.photo_html else None,
+                        style={
+                            'cursor': 'pointer' if checkpoint.photo_html else 'default',
+                            'position': 'relative'
+                        },
+                        id={"type": "checkpoint-photo-thumbnail", "index": current_index}
+                    ),
+                    style={'display': 'block' if checkpoint.photo_html else 'none'}
+                )
+            ], width=3)
+        ], className="g-2")
     ])
-    
-    

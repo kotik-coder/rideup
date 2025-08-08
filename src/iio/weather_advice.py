@@ -31,8 +31,8 @@ class WeatherAdvisor:
             current = data['list'][0]
             current_weather = current['weather'][0]
             
-            # Current precipitation (now)
-            precip_now = current.get('rain', {}).get('1h', 0) or current.get('snow', {}).get('1h', 0)  # Using 1h as "now"
+            # Current precipitation (now) in mm/hour
+            precip_now = current.get('rain', {}).get('1h', 0) or current.get('snow', {}).get('1h', 0)
             
             # Calculate precipitation over available historical period (3 days)
             precip_3days = 0
@@ -45,7 +45,13 @@ class WeatherAdvisor:
                 precip = forecast.get('rain', {}).get('3h', 0) or forecast.get('snow', {}).get('3h', 0)
                 precip_3days += precip
             
-            # Get next 8 hours forecast (3 steps in 3-hour intervals)
+            # Get max precipitation rate in next 8 hours (3 steps in 3-hour intervals)
+            precip_forecast_max = max(
+                (forecast.get('rain', {}).get('3h', 0) or forecast.get('snow', {}).get('3h', 0)) / 3  # Convert to mm/hour
+                for forecast in data['list'][1:4]  # Next 3 forecast periods (9 hours total)
+            )
+            
+            # Get next 8 hours forecast
             hourly_forecast = []
             for forecast in data['list'][1:4]:  # Next 3 forecast periods (9 hours total)
                 forecast_time = datetime.fromtimestamp(forecast['dt'])
@@ -57,11 +63,12 @@ class WeatherAdvisor:
                     'wind': forecast['wind']['speed'],
                     'icon': f"https://openweathermap.org/img/wn/{forecast['weather'][0]['icon']}.png"
                 })
-
+                                
             # Debug output
             print_step("WeatherDebug", 
-                f"Current: {precip_now}mm | "
-                f"3-day total: {precip_3days:.1f}mm\n"
+                f"Current: {precip_now:.1f}mm/h | "
+                f"3-day total: {precip_3days:.1f}mm | "
+                f"Max forecast: {precip_forecast_max:.1f}mm/h\n"
                 f"Next 8h forecast: {[f['condition'] for f in hourly_forecast]}"
             )
             
@@ -71,7 +78,8 @@ class WeatherAdvisor:
                 wind_speed=current['wind']['speed'],
                 precipitation_now=precip_now,
                 precipitation_last_3days=precip_3days,
-                last_updated = datetime.now(timezone.utc),
+                precipitation_forecast_max=precip_forecast_max,
+                last_updated=datetime.now(timezone.utc),
                 icon_url=f"https://openweathermap.org/img/wn/{current_weather['icon']}@2x.png",
                 hourly_forecast=hourly_forecast
             )
@@ -89,7 +97,7 @@ class WeatherAdvisor:
         advice = []
         precip_class = weather.precipitation_classification
         
-        # Temperature conditions
+        # Temperature conditions (unchanged)
         if weather.temperature > 30:
             advice.append("🔥 Extreme heat expected - hydrate frequently and consider morning rides")
         elif weather.temperature < 0:
@@ -97,71 +105,62 @@ class WeatherAdvisor:
         elif weather.temperature < 5:
             advice.append("🥶 Chilly conditions - dress in warm layers")
         
-        # Current precipitation analysis
+        # Current precipitation analysis - updated to use new classification
         current_condition = weather.condition.lower()
         if "rain" in current_condition:
-            if precip_class['very_heavy']:
-                advice.append("🌧️ Torrential rain - trails will be severely affected")
-            elif precip_class['heavy']:
-                advice.append("🌧️ Heavy rain - significant trail deterioration expected")
+            if precip_class['current_rate_violent']:
+                advice.append("🌧️ Torrential rain (>50mm/h) - immediate danger, seek shelter")
+            elif precip_class['current_rate_heavy']:
+                advice.append("🌧️ Heavy rain (10-50mm/h) - trails deteriorating rapidly")
+            elif precip_class['current_rate_moderate']:
+                advice.append("🌧️ Moderate rain (2.5-10mm/h) - trails getting wet")
             else:
-                advice.append("🌧️ Light rain - trails becoming wet")
+                advice.append("🌧️ Light rain (<2.5mm/h) - minor trail impact")
         elif "snow" in current_condition:
             advice.append("❄️ Snow on trails - possible icy sections")
         
-        # Historical precipitation impact
-        if precip_class['very_heavy']:
-            advice.append("⚠️ Exceptional rainfall - many trails likely impassable")
-        elif precip_class['heavy']:
-            advice.append("⚠️ Heavy recent rainfall - trails saturated and muddy")
-        elif precip_class['moderate']:
-            advice.append("⚠️ Considerable recent rain - many wet sections")
-        elif precip_class['some']:
-            advice.append("⚠️ Some recent rain - patches of mud possible")
+        # Historical precipitation impact - updated thresholds
+        if precip_class['historical_very_heavy']:
+            advice.append("⚠️ Exceptional rainfall (>100mm/3d) - many trails impassable")
+        elif precip_class['historical_heavy']:
+            advice.append("⚠️ Heavy recent rainfall (50-100mm/3d) - trails saturated")
+        elif precip_class['historical_moderate']:
+            advice.append("⚠️ Considerable recent rain (25-50mm/3d) - many wet sections")
+        elif precip_class['historical_light']:
+            advice.append("⚠️ Light recent rain (<25mm/3d) - some damp patches")
         
-        # Forecast conditions
-        future_conditions = [f['condition'].lower() for f in weather.hourly_forecast]
-        if any("rain" in cond for cond in future_conditions):
-            if precip_class['very_heavy'] or precip_class['heavy']:
-                advice.append("☔ Additional rain coming - already poor conditions will worsen")
-            elif precip_class['moderate']:
-                advice.append("☔ More rain expected - trail conditions deteriorating")
-            else:
-                advice.append("☔ Rain expected soon - trails may get wetter")
+        # Forecast conditions - updated to use forecast classification
+        if precip_class['forecast_violent']:
+            advice.append("☔ Violent rain forecast (>50mm/h) - avoid riding")
+        elif precip_class['forecast_heavy']:
+            advice.append("☔ Heavy rain forecast (10-50mm/h) - conditions will worsen")
+        elif precip_class['forecast_moderate']:
+            advice.append("☔ Moderate rain forecast (2.5-10mm/h) - trails will get wetter")
+        elif precip_class['forecast_light']:
+            advice.append("☔ Light rain forecast (<2.5mm/h) - minor impact expected")
         
-        if any("snow" in cond for cond in future_conditions):
+        if any("snow" in f['condition'].lower() for f in weather.hourly_forecast):
             advice.append("❄️ Snow expected - prepare for icy conditions")
                 
-        # Terrain-specific advice
+        # Terrain-specific advice - updated to use new classification
         if terrain:
-            # Get weather-adjusted traction score
             adjusted_traction = terrain.get_adjusted_traction(weather)
             
             # Clay-specific advice
             if terrain.dominant_surface == "clay":
-                if precip_class['very_heavy']:
-                    advice.append("⛔ Clay trails impassable after this much rain")
-                elif precip_class['heavy']:
-                    advice.append("⚠️ Clay sections extremely slippery - avoid completely")
-                elif precip_class['moderate'] or "rain" in current_condition:
-                    advice.append("⚠️ Clay becomes treacherous when wet - use extreme caution")
-                elif precip_class['some']:
-                    advice.append("⚠️ Clay sections may remain slippery")
-                # Additional warning based on adjusted traction
-                if adjusted_traction < 0.3:
-                    advice.append("🚨 Critical clay conditions - extremely low traction")
+                if precip_class['current_rate_heavy'] or precip_class['current_rate_violent']:
+                    advice.append("⛔ Clay trails impassable in heavy rain")
+                elif precip_class['current_rate_moderate']:
+                    advice.append("⚠️ Clay becomes treacherous in moderate rain")
+                elif precip_class['historical_heavy'] or precip_class['historical_very_heavy']:
+                    advice.append("⚠️ Clay remains dangerous after heavy rainfall")
             
             # Sand-specific advice
             if terrain.dominant_surface == "sand":
                 if "snow" in current_condition:
                     advice.append("⚠️ Snow on sand - traction may improve but watch for hidden obstacles")
-                elif precip_class['heavy'] or precip_class['very_heavy']:
+                elif precip_class['current_rate_heavy'] or precip_class['current_rate_violent']:
                     advice.append("⚠️ Wet sand will be heavy and difficult to ride through")
-                elif precip_class['moderate']:
-                    advice.append("⚠️ Sand may be compacted and slow-rolling")
-                # Additional advice based on adjusted traction
-                if adjusted_traction < 0.35:
-                    advice.append("⚠️ Sandy sections require significant effort")
             
             # General traction advice using adjusted score
             if adjusted_traction < 0.3:
@@ -180,7 +179,7 @@ class WeatherAdvisor:
                 elif terrain.dominant_surface == "metal":
                     advice.append("⚠️ Metal surfaces become dangerously slick when wet")
         
-        # Wind conditions
+        # Wind conditions (unchanged)
         if weather.wind_speed > 15:
             advice.append("💨 Strong winds expected - be cautious on exposed ridges")
         elif weather.wind_speed > 10:

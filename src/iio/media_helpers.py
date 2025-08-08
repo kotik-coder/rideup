@@ -256,7 +256,7 @@ def _get_yandex_satellite(lat: float, lon: float) -> str:
     return f"https://static-maps.yandex.ru/1.x/?{urlencode(params)}"
 
 def get_photo_html(lat: float, lon: float, local_photo_path: Optional[str] = None) -> str:
-    """Генерация HTML с защитой от ошибок"""
+    """Генерация HTML без ограничений размера с оптимизацией для модального окна"""
     photo_url = None
     source = ""
     
@@ -274,10 +274,10 @@ def get_photo_html(lat: float, lon: float, local_photo_path: Optional[str] = Non
         """        
     
     return f"""
-    <div style="margin:10px 0;text-align:center">
+    <div style="margin:0;text-align:center;height:100%;width:100%">
         <img src="{photo_url}" 
              onerror="this.src='{_get_yandex_satellite(lat, lon)}'"
-             style="max-width:100%;max-height:200px;border-radius:4px;border:1px solid #eee;">
+             style="max-width:100%;max-height:100%;object-fit:contain;border-radius:4px;">
         <p style="font-size:0.8em;color:#999;margin-top:5px">
             Источник: {source}
         </p>

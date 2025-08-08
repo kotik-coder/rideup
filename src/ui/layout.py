@@ -182,14 +182,14 @@ def setup_layout(spot: Spot):
                     'z-index': '3'
                 }
             ),
-            
+                                                
             # Bottom panel (graph and controls)
             html.Div(
                 [
-                    # Main content row
+                    # Main content container
                     html.Div(
                         [
-                            # Radio buttons column
+                            # Radio buttons column (fixed width)
                             html.Div(
                                 dbc.RadioItems(
                                     id='graph-selector',
@@ -199,48 +199,50 @@ def setup_layout(spot: Spot):
                                     ],
                                     value='elevation',
                                     inline=False,
-                                    className="h-100",
                                     style={
-                                        'padding': '10px',
-                                        'background-color': 'rgba(240, 240, 240, 0.95)',
+                                        'padding': '8px',
+                                        'background-color': 'rgba(255, 255, 255, 0.85)', 
                                         'border-radius': '8px 0 0 8px',
-                                        'display': 'flex',
-                                        'flex-direction': 'column',
-                                        'justify-content': 'center'
                                     }
                                 ),
                                 style={
-                                    'width': '120px',
+                                    'width': '110px',  # Slightly reduced width
                                     'height': '100%',
-                                    'display': 'inline-block'
+                                    'float': 'left'
                                 }
                             ),
                             
-                            # Graph column
+                            # Graph container
                             html.Div(
                                 dcc.Graph(
                                     id='profile-graph',
+                                    config={
+                                        'responsive': False,
+                                        'autosizable': False,
+                                        'displayModeBar': False,
+                                        'displaylogo': False
+                                    },
                                     style={
-                                        'height': '100%',
+                                        'height': 'calc(25vh - 16px)',  # Reduced padding
                                         'width': '100%',
                                         'margin': '0',
                                         'padding': '0'
                                     }
                                 ),
                                 style={
+                                    'width': 'calc(100% - 110px)',  # Matches radio button width
                                     'height': '100%',
-                                    'width': 'calc(100% - 120px)',
-                                    'display': 'inline-block',
-                                    'vertical-align': 'top',
-                                    'padding': '10px',
-                                    'box-sizing': 'border-box'
+                                    'padding': '8px',  # Reduced padding
+                                    'box-sizing': 'border-box',
+                                    'overflow': 'hidden'
                                 }
                             )
                         ],
                         style={
-                            'height': 'calc(100% - 10px)',
+                            'height': '100%',
                             'width': '100%',
-                            'margin-bottom': '10px'
+                            'margin': '0',
+                            'padding': '0'
                         }
                     )
                 ],
@@ -250,15 +252,16 @@ def setup_layout(spot: Spot):
                     'bottom': vertical_margin,
                     'left': '20px',
                     'right': f'calc({right_panel_width} + 40px)',
-                    'height': '0',
-                    'background-color': 'rgba(255, 255, 255, 0.95)',
+                    'min-height': '180px',  # Slightly reduced minimum
+                    'max-height': '280px',  # Slightly reduced maximum
+                    'background-color': 'rgba(255, 255, 255, 0.85)', 
                     'border-radius': '8px',
                     'box-shadow': '0 2px 10px rgba(0,0,0,0.1)',
                     'z-index': '2',
                     'overflow': 'hidden',
-                    'transition': 'all 0.3s ease',
-                    'display': 'flex',
-                    'flex-direction': 'column'
+                    'transition': 'all 0.3s ease',                    
+                    'height': '0',  # Start minimized
+                    'min-height': '0',
                 }
             ),
             
