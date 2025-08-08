@@ -217,22 +217,22 @@ def setup_layout(spot: Spot):
                                 dcc.Graph(
                                     id='profile-graph',
                                     config={
-                                        'responsive': False,
-                                        'autosizable': False,
+                                        'responsive': True,  # Changed from False to True
+                                        'autosizable': True,  # Changed from False to True
                                         'displayModeBar': False,
                                         'displaylogo': False
                                     },
                                     style={
-                                        'height': 'calc(25vh - 16px)',  # Reduced padding
+                                        'height': '100%',  # Changed to 100% to fill container
                                         'width': '100%',
                                         'margin': '0',
                                         'padding': '0'
                                     }
                                 ),
                                 style={
-                                    'width': 'calc(100% - 110px)',  # Matches radio button width
+                                    'width': 'calc(100% - 110px)',
                                     'height': '100%',
-                                    'padding': '8px',  # Reduced padding
+                                    'padding': '8px',
                                     'box-sizing': 'border-box',
                                     'overflow': 'hidden'
                                 }

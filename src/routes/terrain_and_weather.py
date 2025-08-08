@@ -13,6 +13,48 @@ class WeatherData:
     last_updated: datetime
     icon_url: str       # URL to weather icon
     hourly_forecast: List[Dict]  # Forecast for next 8 hours
+
+    def get_wind_description(self, wind_gust: Optional[float] = None) -> str:
+        """
+        Convert wind speed (m/s) to descriptive text using Beaufort scale.
+        Optionally considers gusts for enhanced description.
+        
+        Based on Beaufort Scale (knots converted to m/s):
+        https://en.wikipedia.org/wiki/Beaufort_scale
+        """
+        if self.wind_speed < 0.5:
+            desc = "Calm"
+        elif self.wind_speed < 1.5:
+            desc = "Light air"
+        elif self.wind_speed < 3.3:
+            desc = "Light breeze"
+        elif self.wind_speed < 5.5:
+            desc = "Gentle breeze"
+        elif self.wind_speed < 7.9:
+            desc = "Moderate breeze"
+        elif self.wind_speed < 10.7:
+            desc = "Fresh breeze"
+        elif self.wind_speed < 13.8:
+            desc = "Strong breeze"
+        elif self.wind_speed < 17.1:
+            desc = "High wind, moderate gale"
+        elif self.wind_speed < 20.7:
+            desc = "Gale, near gale"
+        elif self.wind_speed < 24.4:
+            desc = "Strong gale"
+        else:
+            desc = "Storm or violent storm"
+
+        # Enhance with gust info if available
+        if wind_gust and wind_gust > self.wind_speed * 1.8:  # Significant gust
+            if wind_gust >= 20:
+                desc += " (with severe gusts)"
+            elif wind_gust >= 15:
+                desc += " (with strong gusts)"
+            else:
+                desc += " (with gusts)"
+
+        return desc
     
     @property
     def precipitation_classification(self) -> Dict[str, bool]:
@@ -23,6 +65,8 @@ class WeatherData:
             'current_rate_heavy': 10 <= self.precipitation_now <= 50,
             'current_rate_moderate': 2.5 <= self.precipitation_now < 10,
             'current_rate_light': 0.1 < self.precipitation_now < 2.5,
+            'current_rate_any': self.precipitation_now > 1e-6,
+            'current_rate_clear': self.precipitation_now < 1e-6,
             
             # Forecasted max precipitation rate
             'forecast_violent': self.precipitation_forecast_max > 50,
@@ -93,69 +137,75 @@ class TerrainAnalysis:
         # Special cases
         'rock': '█', 'metal': '▂', 'snow': '❄️'
     }
-            
+                
     def get_adjusted_traction(self, weather: Optional[WeatherData] = None) -> float:
         """
-        Calculate weather-adjusted traction score (0-1) accounting for:
-        - Current weather conditions
-        - Precipitation rates (current and forecast)
-        - Recent precipitation history
-        - Surface-specific multipliers
+        Calculate weather-adjusted traction score (0-1), where weather can only reduce base traction.
         """
         base_score = self.traction_score
         
         if not weather:
-            return base_score
-            
-        # Determine weather severity based on multiple factors
-        condition = 'dry'
+            return base_score  # No weather → no adjustment
+
+        # 1. Determine current condition for multiplier selection
         current_weather = weather.condition.lower()
         precip_class = weather.precipitation_classification
-        
+
+        condition = 'dry'
         if "snow" in current_weather or "ice" in current_weather:
             condition = 'snow'
         elif "rain" in current_weather or weather.precipitation_now > 0:
             condition = 'wet'
-        
-        # Get appropriate multipliers
-        multipliers = self.PRECIPITATION_MULTIPLIERS[condition]
-        
-        # Apply reduction based on precipitation intensity
-        intensity_adjustment = 1.0
-        if precip_class['current_rate_violent'] or precip_class['forecast_violent']:
-            intensity_adjustment = 0.6  # 40% reduction for violent rain
-        elif precip_class['current_rate_heavy'] or precip_class['forecast_heavy']:
-            intensity_adjustment = 0.75  # 25% reduction for heavy rain
-        elif precip_class['current_rate_moderate'] or precip_class['forecast_moderate']:
-            intensity_adjustment = 0.85   # 15% reduction for moderate rain
-        elif precip_class['current_rate_light'] or precip_class['forecast_light']:
-            intensity_adjustment = 0.95   # 5% reduction for light rain
-        
-        # Apply additional reduction based on precipitation history
-        historical_adjustment = 1.0
-        if precip_class['historical_very_heavy']:
-            historical_adjustment = 0.7  # 30% reduction
-        elif precip_class['historical_heavy']:
-            historical_adjustment = 0.8   # 20% reduction
-        elif precip_class['historical_moderate']:
-            historical_adjustment = 0.9   # 10% reduction
-        elif precip_class['historical_light']:
-            historical_adjustment = 0.95  # 5% reduction for light accumulated rain
-        
-        # Calculate weighted adjustment based on surface composition
-        adjusted_score = 0.0
+
+        # 2. Get base surface-specific multiplier (e.g., rock stays grippy, dirt gets slippery)
+        try:
+            multipliers = self.PRECIPITATION_MULTIPLIERS[condition]
+        except KeyError:
+            multipliers = self.PRECIPITATION_MULTIPLIERS['dry']  # fallback
+
+        # 3. Surface-weighted average of weather multipliers
+        surface_multiplier = 0.0
         total_weight = 0.0
-        
+
         for surface, proportion in self.surface_types.items():
             surface_lower = surface.lower()
             multiplier = multipliers.get(surface_lower, multipliers['default'])
-            surface_weight = self.SURFACE_WEIGHTS.get(surface_lower, 0.5)
-            
-            # Apply all adjustments (surface-specific, intensity, and historical)
-            adjusted_score += (surface_weight * multiplier * intensity_adjustment * historical_adjustment) * proportion
-            total_weight += proportion
-            
+            weight = self.SURFACE_WEIGHTS.get(surface_lower, 1.0)  # importance of surface in traction
+
+            surface_multiplier += multiplier * weight * proportion
+            total_weight += weight * proportion
+
         if total_weight > 0:
-            adjusted_score /= total_weight
-            
-        return min(1.0, max(0.0, adjusted_score))
+            surface_multiplier /= total_weight
+        else:
+            surface_multiplier = 1.0  # fallback
+
+        # 4. Intensity adjustment: how bad is current/forecast rain/snow?
+        intensity_multiplier = 1.0
+        if precip_class['current_rate_violent'] or precip_class['forecast_violent']:
+            intensity_multiplier = 0.6
+        elif precip_class['current_rate_heavy'] or precip_class['forecast_heavy']:
+            intensity_multiplier = 0.75
+        elif precip_class['current_rate_moderate'] or precip_class['forecast_moderate']:
+            intensity_multiplier = 0.85
+        elif precip_class['current_rate_light'] or precip_class['forecast_light']:
+            intensity_multiplier = 0.95
+
+        # 5. Historical saturation: trails still wet from past rain?
+        historical_multiplier = 1.0
+        if precip_class['historical_very_heavy']:
+            historical_multiplier = 0.7
+        elif precip_class['historical_heavy']:
+            historical_multiplier = 0.8
+        elif precip_class['historical_moderate']:
+            historical_multiplier = 0.9
+        elif precip_class['historical_light']:
+            historical_multiplier = 0.95
+
+        # 6. Combine all multipliers (all ≤ 1.0) and apply to base traction
+        total_multiplier = surface_multiplier * intensity_multiplier * historical_multiplier
+
+        adjusted_score = base_score * total_multiplier
+
+        # Clamp to valid range
+        return max(0.0, min(1.0, adjusted_score))

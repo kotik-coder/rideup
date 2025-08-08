@@ -131,29 +131,31 @@ class Spot:
         Returns formatted string with emoji indicators.
         """
         return WeatherAdvisor.generate_riding_advice(self.weather, self.terrain)
-                    
+                        
     def _recommend_bike_type(self, surface: str, traction: float) -> str:
-        """Suggest suitable bike type based on terrain analysis.
-        Args:
-            surface: Dominant surface type (e.g., 'gravel', 'rock').
-            traction: Composite score (0-1) from terrain weights.
-        Returns:
-            str: Bike type recommendation.
         """
-        if surface == "sand":
-            return "Fat Bike (4.5\"+ tires or wider)"
-        elif surface == "mud":
-            return "Fat Bike or Enduro (mud tires)"
-        elif traction > 0.75:
-            return "Road/Gravel Bike"  # Smooth asphalt/concrete
+        Recommends a bike type with key specs. Uses British English.
+        Fits compact UIs (target: ~80–100 characters).
+        """
+        surface = surface.lower().strip()
+        
+        # Surface-specific (highest priority)
+        if "sand" in surface:
+            return "Fat bike"
+        if "mud" in surface or "clay" in surface:
+            return "Enduro/Downhill"
+        if "rock" in surface or "scree" in surface or "ledge" in surface:
+            return "Enduro" if traction > 0.5 else "DH bike only"
+
+        # Generic surfaces – use traction
+        if traction > 0.75:
+            return "XC or Gravel"
         elif traction > 0.6:
-            return "XC/Hardtail"       # Compacted gravel/dirt
+            return "XC or Trail/All-Mountain"
         elif traction > 0.45:
-            return "Trail/All-Mountain"  # Rough but rideable
-        elif surface == "rock":
-            return "Enduro/DH (2.4\"+ tires)"
+            return "Trail/All-Mountain"
         else:
-            return "Enduro/DH (full suspension)"
+            return "Enduro"
         
     def _load_terrain_data(self):
         """Simplified terrain loading using TerrainLoader"""

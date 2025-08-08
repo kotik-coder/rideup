@@ -47,24 +47,22 @@ def create_spot_info_card(spot: Spot):
                 surface_list.insert(i, html.Span(", ", className="mx-1"))
 
         # Build traction display
-        traction_display = [
-            html.Span(f"{base_traction:.0%}", className="text-muted"),
-            html.Span(" → ", className="mx-1"),
-            html.Span(f"{traction:.0%}", 
-                        style={'color': '#1f77b4', 'font-weight': 'bold'})
-        ]
+        if traction_difference > 0:
+            traction_display = [
+                html.Span(f"{base_traction:.0%}", className="text-muted"),
+                html.Span(" → ", className="mx-1"),
+                html.Span(f"{traction:.0%}", 
+                            style={'color': '#1f77b4', 'font-weight': 'bold'})
+            ]
+        else: 
+            traction_display = [html.Span(f"{base_traction:.0%}", className="text-muted")]
         
         # Update the weather section in create_spot_info_card function
         weather_section = []
         if spot.weather:
             # Wind description (unchanged)
             wind_speed = spot.weather.wind_speed
-            wind_desc = (
-                "Calm" if wind_speed < 0.5 else
-                "Light breeze" if wind_speed < 3.3 else
-                "Moderate breeze" if wind_speed < 5.5 else 
-                "Strong wind"
-            )
+            wind_desc = spot.weather.get_wind_description()
             
             last_updated_utc = spot.weather.last_updated
             last_updated_local = last_updated_utc.astimezone()
@@ -87,7 +85,11 @@ def create_spot_info_card(spot: Spot):
             precip_class = spot.weather.precipitation_classification
             current_rate = spot.weather.precipitation_now
             forecast_max = spot.weather.precipitation_forecast_max
-            three_day_total = spot.weather.precipitation_last_3days
+            three_days_total = spot.weather.precipitation_last_3days
+            if three_days_total < 0:
+                three_days_total = "N/A"
+            else:
+                three_days_total = f"{three_days_total:.1f}"
             
             # Get current precipitation classification
             current_precip_class = (
@@ -95,7 +97,7 @@ def create_spot_info_card(spot: Spot):
                 "Heavy" if precip_class['current_rate_heavy'] else
                 "Moderate" if precip_class['current_rate_moderate'] else
                 "Light" if current_rate > 0 else
-                "None"
+                ""
             )
             
             weather_section = [
@@ -108,7 +110,7 @@ def create_spot_info_card(spot: Spot):
                                 src=spot.weather.icon_url,
                                 style={'height': '24px', 'margin-right': '8px'}
                             ),
-                            f"{spot.weather.condition} ({current_precip_class})",
+                            f"{spot.weather.condition} {current_precip_class or ''}",
                         ], className="d-flex align-items-center")
                     ], width=6),
                     dbc.Col([
@@ -134,7 +136,7 @@ def create_spot_info_card(spot: Spot):
                             ], width=4),
                             dbc.Col([
                                 html.Div("3-Day Total", className="small text-muted text-center"),
-                                html.Div(f"{three_day_total:.1f} mm", className="text-center")
+                                html.Div(f"{three_days_total} mm", className="text-center")
                             ], width=4)
                         ], className="g-0")
                     ], width=6)
@@ -179,7 +181,7 @@ def create_spot_info_card(spot: Spot):
                                 spot.terrain.dominant_surface,
                                 traction
                             ),
-                            className="small"
+                            className="small",
                         )
                     ], width=4)
                 ], className="mb-3"),
@@ -455,7 +457,7 @@ def create_checkpoint_card(checkpoint, route: ProcessedRoute):
             dbc.ModalBody(
                 html.Div(
                     style={
-                        'height': '70vh',
+                        'height': '50vh',
                         'overflow': 'auto',
                         'padding': '0',
                         'display': 'flex',

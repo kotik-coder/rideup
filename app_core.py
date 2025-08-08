@@ -11,6 +11,8 @@ from src.routes.route_processor import RouteProcessor
 from src.ui.layout import setup_layout
 from src.ui.map_helpers import DEBUG, print_step
 
+from datetime import datetime
+
 class BitsevskyMapApp:
     
     spot : Spot
@@ -68,7 +70,6 @@ class BitsevskyMapApp:
 
     def _print_header(self):
         """Prints startup header information"""
-        from datetime import datetime
         print("\n" + "="*50)
         print(f"Loading Bitsevsky Forest Map")
         print(f"Start time: {datetime.now().strftime('%H:%M:%S')}")

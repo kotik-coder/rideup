@@ -221,9 +221,8 @@ def create_elevation_profile_figure(profile: StaticProfile,
             xanchor="right",
             x=1
         ),
-        autosize=False,
-        height=200,  # Fixed height
-        margin=dict(l=20, r=60, t=40, b=20),
+        autosize=True,
+        margin=dict(l=20, r=60, t=20, b=20),  # Reduced top margin
     )
     return fig
 
@@ -358,9 +357,8 @@ def create_velocity_profile_figure(profile_points: List[TrackAnalysis],
     fig.update_layout(
         xaxis_title='Distance (m)',
         yaxis_title='Velocity (km/h)',
-        autosize=False,
-        height=200,  # Fixed height
-        margin=dict(l=20, r=60, t=40, b=20),
+        autosize=True,
+        margin=dict(l=20, r=60, t=20, b=20),  # Reduced top margin
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
         xaxis=dict(

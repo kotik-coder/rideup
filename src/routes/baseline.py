@@ -59,22 +59,22 @@ class Baseline:
     def _als_baseline(self, y, lam=100, p=0.01, n_iter=10) -> np.ndarray:
         """Asymmetric Least Squares baseline"""
         L = len(y)
-        D = diags([1, -2, 1], [0, 1, 2], shape=(L-2, L))
+        D = diags([1, -2, 1], [0, 1, 2], shape=(L-2, L)).tocsr()  # Convert to CSR format
         w = np.ones(L)
         
         # Force endpoints by giving them huge weights
         w[0] = w[-1] = 1e9
         
         for _ in range(n_iter):
-            W = diags(w)
+            W = diags(w).tocsr()  # Convert to CSR format
             Z = W + lam * D.T @ D
             baseline = spsolve(Z, w * y)            
-            w = 0.8*p * (y > baseline) + 0.2*(1 - p) * (y <= baseline)  # Changed weights
+            w = 0.8*p * (y > baseline) + 0.2*(1 - p) * (y <= baseline)
             
             # Re-enforce endpoint weights
             w[0] = w[-1] = 1e9
             
-        return baseline    
+        return baseline 
 
     # Step 3: Find optimal lambda in this range
     def _optimize_als_params(self, elevations, lam_range=(1, 1e6), p_range=(1E-6, 0.1)):
