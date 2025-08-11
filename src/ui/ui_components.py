@@ -63,19 +63,12 @@ def create_spot_info_card(spot: Spot):
             # Wind description (unchanged)
             wind_speed = spot.weather.wind_speed
             wind_desc = spot.weather.get_wind_description()
-            
-            last_updated_utc = spot.weather.last_updated
-            last_updated_local = last_updated_utc.astimezone()
-            
-            # Calculate age correctly
-            current_utc = datetime.now(timezone.utc)
-            hours_old = (current_utc - last_updated_utc).total_seconds() / 3600
-            
-            recency = ("🟢" if hours_old < 1 else 
-                    "🟡" if hours_old < 3 else 
-                    "🔴")
-            
-            local_time = last_updated_local.strftime('%Y-%m-%d %H:%M')
+
+            recency, local_time, hours_old = spot.weather.get_recency()
+
+            if hours_old > 1:
+                spot.query_weather()
+                recency, local_time, hours_old = spot.weather.get_recency()
             
             # Format weather advice with line breaks
             weather_advice = spot.get_weather_advice()
@@ -457,7 +450,7 @@ def create_checkpoint_card(checkpoint, route: ProcessedRoute):
             dbc.ModalBody(
                 html.Div(
                     style={
-                        'height': '50vh',
+                        'height': '75vh',
                         'overflow': 'auto',
                         'padding': '0',
                         'display': 'flex',

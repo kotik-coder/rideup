@@ -1,6 +1,7 @@
 
+from dataclasses import dataclass
 from enum import Enum, auto
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -38,7 +39,7 @@ class GradientSegmentType(Enum):
         return (self, other) in transitional_pairs or (other, self) in transitional_pairs
     
 class TrailFeatureType(Enum):
-    """Special trail features with their gradient thresholds"""
+    """Trail features that reference RatingSystem for parameters"""
     ROLLER = auto()
     SWITCHBACK = auto()
     TECHNICAL_DESCENT = auto()
@@ -47,24 +48,29 @@ class TrailFeatureType(Enum):
     KICKER = auto()
     DROP = auto()
 
-class ShortFeature:
-    """Represents a short, challenging trail feature with its characteristics"""
-    def __init__(self, 
-                 feature_type: TrailFeatureType,
-                 start_index: int,
-                 end_index: int,
-                 max_gradient: float,
-                 length: float):
-        self.feature_type = feature_type
-        self.start_index = start_index
-        self.end_index = end_index
-        self.max_gradient = max_gradient
-        self.length = length
+    def get_config(self, rating_system: RatingSystem) -> Dict[str, Any]:
+        """Get feature parameters from RatingSystem"""
+        return rating_system.get_feature_config(self.name)
 
-    def __repr__(self):
-        return (f"ShortFeature({self.feature_type.name}, "
-                f"start={self.start_index}, end={self.end_index}, "
-                f"max_grad={self.max_gradient:.1%}, length={self.length:.1f}m)")
+    def is_compatible_with(self, gradient_type: GradientSegmentType, rating_system: RatingSystem) -> bool:
+        """Check compatibility using RatingSystem"""
+        return rating_system.is_feature_compatible(self.name, gradient_type.name)
+
+@dataclass
+class ShortFeature:
+    """Feature that validates against RatingSystem parameters"""
+    feature_type: TrailFeatureType
+    gradient_type: GradientSegmentType
+    start_index: int
+    end_index: int
+    max_gradient: float
+    length: float
+
+    def validate(self, rating_system: RatingSystem) -> bool:
+        """Validate against RatingSystem parameters"""
+        config = self.feature_type.get_config(rating_system)
+        return (config['min_length'] <= self.length <= config['max_length'] and
+                config['gradient_range'][0] <= self.max_gradient <= config['gradient_range'][1])
 
 class ElevationSegment:
     
@@ -96,8 +102,18 @@ class ElevationSegment:
         self.gradients = [gradient]
         self.wavelengths = []
         self.riding_context = "GENERIC"
-        self.short_features = []  # New list to store short, steep features               
+        self.short_features = []  # store short, steep features               
         
+    def get_plot_data(self) -> Dict[str, Any]:
+        return {
+            'start': self.start_index,
+            'end': self.end_index,
+            'gradient_type': self.gradient_type.name,
+            'feature_type': self.feature_type.name if self.feature_type else None,
+            'avg_gradient': self.avg_gradient(),
+            'length': self.length()
+        }
+
     def extend(self, 
                     end_idx: int,
                     gradient: float, 
@@ -122,10 +138,19 @@ class ElevationSegment:
                     new_feature_type == self.feature_type)
         
         return gradient_ok and feature_ok
-    
-    def validate(self, spot_system : RatingSystem) -> bool:
-        min_length = (spot_system.min_steep_length if self.gradient_type in (GradientSegmentType.STEEP_ASCENT, GradientSegmentType.STEEP_DESCENT)
-                     else spot_system.min_segment_length)
+        
+    def validate(self, spot_system: RatingSystem) -> bool:
+        min_length = (spot_system.min_steep_length 
+                    if self.gradient_type in (GradientSegmentType.STEEP_ASCENT, 
+                                            GradientSegmentType.STEEP_DESCENT)
+                    else spot_system.min_segment_length)
+                    
+        # Additional validation for feature segments
+        if self.feature_type:
+            config = self.feature_type.get_config(spot_system)
+            if not (config['min_length'] <= self.length() <= config['max_length']):
+                return False
+                
         return self.length() >= min_length
     
     def is_roller_candidate(self) -> bool:

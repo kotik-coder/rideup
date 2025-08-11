@@ -235,7 +235,7 @@ class SegmentProfile:
         for start_idx, end_idx in extreme_features:
             # Calculate feature length using distances
             feature_length = distances[end_idx] - distances[start_idx]
-            
+
             # Skip features that are too long or have zero length
             if (feature_length >= self.spot_system.step_feature_max_length or 
                 feature_length <= 0):
@@ -261,20 +261,32 @@ class SegmentProfile:
             
             if avg_feature_gradient > steep_ascent_min:
                 ftr_type = tft.KICKER
+                gradient_type = gst.STEEP_ASCENT
             elif avg_feature_gradient < steep_descent_max:
                 ftr_type = tft.DROP
+                gradient_type = gst.STEEP_DESCENT
             else:
+                continue            
+
+            # Validate feature compatibility before adding
+            if not self.spot_system.is_feature_compatible(ftr_type.name, gradient_type.name):
+                continue
+
+            # Validate feature length against RatingSystem parameters
+            config = ftr_type.get_config(self.spot_system)
+            if not (config['min_length'] <= feature_length <= config['max_length']):
                 continue
             
             segment.short_features.append(
                 ShortFeature(
-                    ftr_type,
+                    feature_type=ftr_type,
+                    gradient_type=gradient_type,  # Added this required parameter
                     start_index=segment.start_index + start_idx,
                     end_index=segment.start_index + end_idx,
                     max_gradient=max_feature_gradient,
                     length=feature_length
                 )
-            )
+            ) 
         
         if not segment.feature_type:
 

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 @dataclass
@@ -13,6 +13,20 @@ class WeatherData:
     last_updated: datetime
     icon_url: str       # URL to weather icon
     hourly_forecast: List[Dict]  # Forecast for next 8 hours
+
+    def get_recency(self):
+        last_updated_utc = self.last_updated
+        last_updated_local = last_updated_utc.astimezone()
+        current_utc = datetime.now(timezone.utc)
+        hours_old = (current_utc - last_updated_utc).total_seconds() / 3600
+        
+        recency = ("🟢" if hours_old < 1 else 
+                 "🟡" if hours_old < 3 else 
+                 "🔴")
+        
+        local_time = last_updated_local.strftime('%Y-%m-%d %H:%M')
+
+        return (recency, local_time, hours_old)
 
     def get_wind_description(self, wind_gust: Optional[float] = None) -> str:
         """
@@ -137,75 +151,84 @@ class TerrainAnalysis:
         # Special cases
         'rock': '█', 'metal': '▂', 'snow': '❄️'
     }
-                
-    def get_adjusted_traction(self, weather: Optional[WeatherData] = None) -> float:
+    
+    TRACTION_WEIGHTS = {
+        'default': {'surface': 0.5, 'intensity': 0.3, 'historical': 0.2},
+        'climbing': {'surface': 0.7, 'intensity': 0.2, 'historical': 0.1},
+        'trail_run': {'surface': 0.3, 'intensity': 0.4, 'historical': 0.3},  # Increased intensity weight
+        'downhill': {'surface': 0.6, 'intensity': 0.3, 'historical': 0.1}  # New profile
+    }
+
+    def get_adjusted_traction(self, weather: Optional[WeatherData] = None, profile='default') -> float:
         """
-        Calculate weather-adjusted traction score (0-1), where weather can only reduce base traction.
+        Enhanced weather-adjusted traction score with:
+        - More sensitive precipitation response
+        - Profile-specific scaling
+        - Dynamic minimum traction floor
         """
         base_score = self.traction_score
-        
         if not weather:
-            return base_score  # No weather → no adjustment
+            return base_score
 
-        # 1. Determine current condition for multiplier selection
-        current_weather = weather.condition.lower()
+        # 1. Condition detection with enhanced snow/ice handling
         precip_class = weather.precipitation_classification
-
         condition = 'dry'
-        if "snow" in current_weather or "ice" in current_weather:
+        if precip_class.get('current_snow') or precip_class.get('current_ice'):
             condition = 'snow'
-        elif "rain" in current_weather or weather.precipitation_now > 0:
+        elif (precip_class.get('current_rate_any') or 
+            weather.condition.lower() in ['rain', 'drizzle', 'showers']):
             condition = 'wet'
 
-        # 2. Get base surface-specific multiplier (e.g., rock stays grippy, dirt gets slippery)
-        try:
-            multipliers = self.PRECIPITATION_MULTIPLIERS[condition]
-        except KeyError:
-            multipliers = self.PRECIPITATION_MULTIPLIERS['dry']  # fallback
+        # 2. Surface multiplier with condition-specific minimum
+        multipliers = self.PRECIPITATION_MULTIPLIERS.get(condition, self.PRECIPITATION_MULTIPLIERS['dry'])
+        surface_multiplier = 1.0
+        if self.surface_types:
+            total_proportion = sum(self.surface_types.values())
+            surface_multiplier = max(
+                0.5 if condition == 'wet' else 0.3,  # Minimum surface multiplier
+                sum(
+                    multipliers.get(s.lower(), multipliers['default']) * p
+                    for s, p in self.surface_types.items()
+                ) / total_proportion
+            )
 
-        # 3. Surface-weighted average of weather multipliers
-        surface_multiplier = 0.0
-        total_weight = 0.0
-
-        for surface, proportion in self.surface_types.items():
-            surface_lower = surface.lower()
-            multiplier = multipliers.get(surface_lower, multipliers['default'])
-            weight = self.SURFACE_WEIGHTS.get(surface_lower, 1.0)  # importance of surface in traction
-
-            surface_multiplier += multiplier * weight * proportion
-            total_weight += weight * proportion
-
-        if total_weight > 0:
-            surface_multiplier /= total_weight
-        else:
-            surface_multiplier = 1.0  # fallback
-
-        # 4. Intensity adjustment: how bad is current/forecast rain/snow?
+        # 3. Enhanced precipitation intensity scaling
         intensity_multiplier = 1.0
         if precip_class['current_rate_violent'] or precip_class['forecast_violent']:
-            intensity_multiplier = 0.6
+            intensity_multiplier = 0.65  # More severe penalty
         elif precip_class['current_rate_heavy'] or precip_class['forecast_heavy']:
-            intensity_multiplier = 0.75
+            intensity_multiplier = 0.8
         elif precip_class['current_rate_moderate'] or precip_class['forecast_moderate']:
-            intensity_multiplier = 0.85
+            intensity_multiplier = 0.9
         elif precip_class['current_rate_light'] or precip_class['forecast_light']:
-            intensity_multiplier = 0.95
+            intensity_multiplier = 0.96  # Reduced from 0.98
 
-        # 5. Historical saturation: trails still wet from past rain?
+        # 4. Historical saturation with longer memory
         historical_multiplier = 1.0
         if precip_class['historical_very_heavy']:
-            historical_multiplier = 0.7
+            historical_multiplier = 0.8  # More impact
         elif precip_class['historical_heavy']:
-            historical_multiplier = 0.8
+            historical_multiplier = 0.88
         elif precip_class['historical_moderate']:
-            historical_multiplier = 0.9
+            historical_multiplier = 0.94
         elif precip_class['historical_light']:
-            historical_multiplier = 0.95
+            historical_multiplier = 0.97
 
-        # 6. Combine all multipliers (all ≤ 1.0) and apply to base traction
-        total_multiplier = surface_multiplier * intensity_multiplier * historical_multiplier
+        # 5. Weighted combination with profile sensitivity
+        w = self.TRACTION_WEIGHTS.get(profile, self.TRACTION_WEIGHTS['default'])
+        total_multiplier = (
+            surface_multiplier * w['surface'] +
+            intensity_multiplier * w['intensity'] +
+            historical_multiplier * w['historical']
+        )
 
-        adjusted_score = base_score * total_multiplier
+        # 6. Dynamic non-linear scaling based on condition
+        exponent = 0.6 if condition != 'dry' else 0.8  # More aggressive reduction in wet/snow
+        adjusted_score = base_score * (total_multiplier ** exponent)
 
-        # Clamp to valid range
-        return max(0.0, min(1.0, adjusted_score))
+        # 7. Dynamic minimum traction floor based on conditions
+        min_traction = max(
+            0.05,  # Absolute minimum
+            0.15 if condition == 'snow' else 0.1  # Higher minimum for snow
+        )
+        return max(min_traction, min(1.0, adjusted_score))

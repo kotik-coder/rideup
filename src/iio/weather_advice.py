@@ -1,13 +1,90 @@
 # weather_advice.py
+import json
+from pathlib import Path
 import requests
 from datetime import datetime, timedelta, timezone
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Optional, List, Dict
 from src.iio.terrain_loader import TerrainAnalysis
 from src.ui.map_helpers import print_step
 from src.routes.terrain_and_weather import WeatherData
 
+class WeatherCache:
+    """Handles reading and writing weather data to/from disk"""
+    CACHE_DIR = Path("weather_cache")
+    CACHE_FILE = CACHE_DIR / "weather_data.json"
+    CACHE_EXPIRY_HOURS = 1  # Cache expires after 1 hour
+
+    @classmethod
+    def _ensure_cache_dir(cls):
+        """Create cache directory if it doesn't exist"""
+        cls.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    @classmethod
+    def load_cache(cls) -> Dict[str, dict]:
+        """Load cached weather data from disk"""
+        cls._ensure_cache_dir()
+        if not cls.CACHE_FILE.exists():
+            return {}
+        
+        try:
+            with open(cls.CACHE_FILE, 'r') as f:
+                data = json.load(f)
+                # Convert string timestamps back to datetime objects
+                for key, weather_dict in data.items():
+                    if 'last_updated' in weather_dict:
+                        weather_dict['last_updated'] = datetime.fromisoformat(weather_dict['last_updated'])
+                return data
+        except Exception as e:
+            print_step("WeatherCache", f"Failed to load cache: {e}", level="WARNING")
+            return {}
+
+    @classmethod
+    def save_cache(cls, cache_data: Dict[str, dict]) -> None:
+        """Save weather data to disk"""
+        cls._ensure_cache_dir()
+        try:
+            # Convert datetime objects to ISO format strings for JSON serialization
+            serializable_data = {}
+            for key, weather_dict in cache_data.items():
+                serializable_data[key] = weather_dict.copy()
+                if 'last_updated' in weather_dict and isinstance(weather_dict['last_updated'], datetime):
+                    serializable_data[key]['last_updated'] = weather_dict['last_updated'].isoformat()
+            
+            with open(cls.CACHE_FILE, 'w') as f:
+                json.dump(serializable_data, f, indent=2)
+        except Exception as e:
+            print_step("WeatherCache", f"Failed to save cache: {e}", level="WARNING")
+
+    @classmethod
+    def get_cached_weather(cls, lat: float, lon: float) -> Optional[WeatherData]:
+        """Retrieve cached weather data if recent enough"""
+        cache_key = f"{lat:.4f},{lon:.4f}"
+        cache_data = cls.load_cache()
+        
+        if cache_key in cache_data:
+            weather_dict = cache_data[cache_key]
+            last_updated = weather_dict['last_updated']
+            current_time = datetime.now(timezone.utc)
+            hours_old = (current_time - last_updated).total_seconds() / 3600
+            
+            if hours_old < cls.CACHE_EXPIRY_HOURS:
+                try:
+                    return WeatherData(**weather_dict)
+                except Exception as e:
+                    print_step("WeatherCache", f"Failed to reconstruct WeatherData: {e}", level="WARNING")
+        return None
+
+    @classmethod
+    def cache_weather(cls, lat: float, lon: float, weather_data: WeatherData) -> None:
+        """Store weather data in cache"""
+        cache_key = f"{lat:.4f},{lon:.4f}"
+        cache_data = cls.load_cache()
+        cache_data[cache_key] = asdict(weather_data)
+        cls.save_cache(cache_data)
+
 class WeatherAdvisor:
+    
     @staticmethod
     def get_current_weather(bounds: List[float], api_key: str) -> Optional[WeatherData]:
         """
@@ -24,6 +101,12 @@ class WeatherAdvisor:
             # Center of bounding box
             lat = (bounds[1] + bounds[3]) / 2
             lon = (bounds[0] + bounds[2]) / 2
+
+            # Check cache first
+            cached_weather = WeatherCache.get_cached_weather(lat, lon)
+            if cached_weather:
+                print_step("Weather", f"Using cached weather data ({cached_weather.get_recency()[2]:.1f} hours old)")
+                return cached_weather
 
             # === 1. Get CURRENT weather ===
             current_url = (
@@ -93,7 +176,7 @@ class WeatherAdvisor:
                 f"Conditions: {[f['condition'] for f in hourly_forecast]}"
             )
 
-            return WeatherData(
+            weather_data = WeatherData(
                 temperature=current_main['temp'],
                 condition=current_weather['main'],
                 wind_speed=current_wind.get('speed', 0),
@@ -104,6 +187,9 @@ class WeatherAdvisor:
                 icon_url=f"https://openweathermap.org/img/wn/{current_weather['icon']}@2x.png",
                 hourly_forecast=hourly_forecast
             )
+            
+            WeatherCache.cache_weather(lat, lon, weather_data)
+            return weather_data
 
         except requests.exceptions.RequestException as e:
             print_step("Weather", f"HTTP error fetching weather: {e}", level="ERROR")
