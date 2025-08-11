@@ -45,7 +45,15 @@ class RatingSystem:
                 "min_length": 50,
                 "max_length": 500,
                 "gradient_range": (-0.05, 0.05),
+                "wavelength_range": (10, 50),  # Added for roller
                 "difficulty_impact": 1.5
+            },
+            "FLOW_DESCENT": {
+                "min_length": 50,
+                "max_length": 500,
+                "gradient_range": (-0.12, -0.05),
+                "wavelength_range": (10, 50),  # Already existed
+                "difficulty_impact": 1.2
             },
             "SWITCHBACK": {
                 "min_length": 15,
@@ -64,13 +72,6 @@ class RatingSystem:
                 "max_length": 200,
                 "gradient_range": (0.15, float('inf')),
                 "difficulty_impact": 2.5
-            },
-            "FLOW_DESCENT": {
-                "min_length": 50,
-                "max_length": 500,
-                "gradient_range": (-0.12, -0.05),
-                "wavelength_range": (10, 50),
-                "difficulty_impact": 1.2
             },
             "KICKER": {
                 "min_length": 1,
@@ -106,8 +107,6 @@ class RatingSystem:
     # Wavelength parameters
     wavelength_clustering_eps: float = 0.5
     wavelength_match_tolerance: float = 0.3
-    flow_wavelength_min: float = 10
-    flow_wavelength_max: float = 50
 
     def validate_config(self) -> List[str]:
         """Check configuration consistency"""

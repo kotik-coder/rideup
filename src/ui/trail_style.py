@@ -1,6 +1,6 @@
 # trail_style.py
 from typing import Union
-from src.routes.trail_features import ElevationSegment
+from src.routes.profile_analyzer import Segment
 from src.routes.statistics_collector import GradientSegmentType, TrailFeatureType
 
 # Color configuration consistent with map_visualization.py
@@ -62,19 +62,19 @@ def get_feature_description(feature_type: TrailFeatureType) -> str:
     }
     return DESCRIPTIONS.get(get_feature_name(feature_type), "Trail feature")
 
-def get_feature_color(segment: ElevationSegment) -> str:
+def get_feature_color(segment: Segment) -> str:
     """Get color based on segment features"""
     if segment.feature_type:
         return COLOR_MAP.get(segment.feature_type)
     return "rgba(150, 150, 150, 0.5)"
 
-def get_segment_name(segment: ElevationSegment) -> str:
+def get_segment_name(segment: Segment) -> str:
     """Get display name for segment"""
     if segment.feature_type:
         return segment.feature_type.name.replace('_', ' ').title()
     return segment.gradient_type.name.replace('_', ' ').title()
 
-def get_arrow_size(segment: ElevationSegment) -> int:
+def get_arrow_size(segment: Segment) -> int:
     """Smart arrow sizing based on segment characteristics"""
     gradient = abs(segment.avg_gradient())
     
@@ -94,7 +94,7 @@ def get_arrow_size(segment: ElevationSegment) -> int:
     # Default size for other segments
     return 24
 
-def get_segment_description(segment: ElevationSegment) -> str:
+def get_segment_description(segment: Segment) -> str:
     """Get comprehensive segment description"""
     if segment.feature_type:
         return get_feature_description(segment.feature_type)

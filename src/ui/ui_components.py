@@ -6,7 +6,7 @@ import numpy as np
 import plotly.graph_objects as go
 
 from src.routes.spot import Spot
-from src.routes.trail_features import ElevationSegment
+from src.routes.profile_analyzer import Segment
 from src.routes.route import Route
 from src.routes.route_processor import ProcessedRoute
 from src.ui.trail_style import get_arrow_size, get_feature_color, get_feature_description, get_feature_name, get_gradient_direction
@@ -295,7 +295,7 @@ def create_route_info_card(route: Route, processed_route: ProcessedRoute, route_
         ], className="py-2")
     ])
 
-def create_segment_visualization(segments: List[ElevationSegment]):
+def create_segment_visualization(segments: List[Segment]):
     """Create keyboard-style visualization with external tooltips"""
     fig = go.Figure()
     

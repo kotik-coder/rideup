@@ -2,7 +2,7 @@ import plotly.graph_objects as go
 import numpy as np
 from typing import List, Optional
 from src.routes.baseline import Baseline
-from src.routes.profile_analyzer import StaticProfile
+from src.routes.profile_analyzer import Profile
 from src.routes.track import TrackAnalysis
 
 def get_fill_polygons(distances, values, threshold_value):
@@ -63,17 +63,18 @@ def calculate_velocity_quartiles(velocities):
     q3 = np.percentile(velocities_np, 75)
     return q1, median, q3
 
-def create_elevation_profile_figure(profile: StaticProfile,
+def create_elevation_profile_figure(profile: Profile,
                                   highlight_distance: Optional[float] = None) -> go.Figure:
     """Create elevation profile with baseline, median reference, and gradient visualization."""
     fig = go.Figure()
     
-    distances = [p.distance_from_origin for p in profile.points]
-    elevations = [p.elevation for p in profile.points]
-    baselines = [p.baseline for p in profile.points]
-    gradients = [p.gradient * 100 for p in profile.points]  # Convert to percentage
+    all_points = [p for s in profile.segments for p in s.points]
+    distances = [p.distance_from_origin for p in all_points]
+    elevations = [p.elevation for p in all_points]
+    baselines = [p.baseline for p in all_points]
+    gradients = [p.gradient * 100 for p in all_points]  # Convert to percentage
     
-    has_baseline = len(baselines) == len(profile.points)    
+    has_baseline = len(baselines) == len(all_points)    
     
     # Calculate median elevation
     median_elevation = np.median(elevations) if elevations else 0

@@ -202,7 +202,7 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
             highlight_distance = processed_route.checkpoints[cp_index].distance_from_origin
         
         if graph_type == 'elevation':
-            fig = create_elevation_profile_figure(profiles['static'], highlight_distance)
+            fig = create_elevation_profile_figure(profiles['profile'], highlight_distance)
         else:
             fig = create_velocity_profile_figure(profiles['dynamic'], highlight_distance)
             

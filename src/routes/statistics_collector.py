@@ -1,39 +1,33 @@
-from typing import Any, List, Dict
+from typing import Any, List, Dict, Optional
 import numpy as np
 
 from src.routes.spot import Spot
-from src.routes.profile_analyzer import SegmentProfile, StaticProfile
+from src.routes.profile_analyzer import Profile, Segment, StaticProfilePoint
 from src.routes.route_processor import ProcessedRoute
 from src.routes.track import Track
 from src.routes.trail_features import *
 from src.routes.terrain_and_weather import TerrainAnalysis, WeatherData
 
-def generate_route_profiles(spot: Spot, proute: ProcessedRoute, associated_tracks: List[Track]):
-    static_profile = StaticProfile(spot.system, proute)
-    segment_profile = SegmentProfile(static_profile, proute)
+def generate_route_profiles(spot: Spot, proute: ProcessedRoute, associated_tracks: List[Track]) -> Dict[str, Any]:
+    """Generate complete route analysis including profile and statistics"""
+    profile = Profile(spot.system, proute)
     
-    # New statistics
-    stats = RouteStatistics(segment_profile)
+    # Calculate additional statistics
     weather_mod = _calculate_weather_modifier(spot.weather)
-    surface_score = _calculate_surface_score(segment_profile.segments[0], spot.terrain)
+    surface_score = _calculate_surface_score(profile.segments[0], spot.terrain) if profile.segments else 0
+    difficulty = _determine_difficulty(profile, spot.system)
     
-    difficulty = _determine_difficulty(
-        segment_profile, 
-        static_profile,
-        spot.system
-    )
+    stats = RouteStatistics(profile)
     
     return {
-        'static': static_profile,
-        'segments': segment_profile,
+        'profile': profile,
         'difficulty': difficulty,
         'statistics': stats,
         'weather_modifier': weather_mod,
-        'surface_score': surface_score,
-        'plot_data': [s.get_plot_data() for s in segment_profile.segments]
+        'surface_score': surface_score
     }
 
-def _calculate_weather_modifier(weather: WeatherData) -> float:
+def _calculate_weather_modifier(weather: Optional[WeatherData]) -> float:
     """Return multiplier based on weather conditions"""
     if not weather:
         return 1.0
@@ -47,7 +41,7 @@ def _calculate_weather_modifier(weather: WeatherData) -> float:
         return 1.15
     return 1.0
 
-def _calculate_surface_score(segment: ElevationSegment, terrain: TerrainAnalysis) -> float:
+def _calculate_surface_score(segment: Segment, terrain: TerrainAnalysis) -> float:
     """Calculate difficulty contribution from surface types"""
     if not terrain.surface_types:
         return 0
@@ -59,11 +53,11 @@ def _calculate_surface_score(segment: ElevationSegment, terrain: TerrainAnalysis
     )
     return (1 - surface_score) * 5  # Invert so lower traction = higher difficulty
 
-def _determine_difficulty(segment_profile: SegmentProfile, static_profile: StaticProfile, spot_system: RatingSystem) -> str:
+def _determine_difficulty(profile: Profile, spot_system: RatingSystem) -> str:
     """
     Calculate route difficulty based on multiple factors with weighted scoring
     """
-    if not segment_profile.segments:
+    if not profile.segments:
         return "GREEN"
     
     # Initialize scoring components
@@ -73,14 +67,15 @@ def _determine_difficulty(segment_profile: SegmentProfile, static_profile: Stati
     feature_score = 0
     
     # Calculate elevation components
-    total_distance = segment_profile.segments[-1].distances[-1]
-    elev_gain = max(p.elevation for p in static_profile.points) - min(p.elevation for p in static_profile.points)
+    total_distance = profile.segments[-1].distances[-1]
+    elev_gain = max(p.elevation for seg in profile.segments for p in seg.points) - \
+               min(p.elevation for seg in profile.segments for p in seg.points)
     
     # Normalize elevation gain (100m per km is considered challenging)
     elevation_score = min((elev_gain / total_distance) * 1000, 10)  # Max 10 points
     
     # Analyze segments
-    for seg in segment_profile.segments:
+    for seg in profile.segments:
         seg_length = seg.length()
         avg_grad = seg.avg_gradient()
         grad_percent = avg_grad * 100
@@ -119,23 +114,69 @@ def _determine_difficulty(segment_profile: SegmentProfile, static_profile: Stati
     return RouteDifficulty.from_score(normalized_score, spot_system).name
 
 class RouteStatistics:
-    def __init__(self, segment_profile: SegmentProfile):
-        self.total_distance = segment_profile.segments[-1].distances[-1]
-        self.elevation_gain = self._calculate_elevation_gain(segment_profile)
-        self.feature_counts = self._count_features(segment_profile)
+    """Collects and calculates various statistics about the route"""
+    def __init__(self, profile: Profile):
+        self.total_distance = profile.segments[-1].distances[-1] if profile.segments else 0
+        self.elevation_gain = self._calculate_elevation_gain(profile)
+        self.feature_counts = self._count_features(profile)
+        self.segment_stats = self._calculate_segment_stats(profile)
         
-    def _calculate_elevation_gain(self, segment_profile):
-        return sum(
-            max(0, seg.gradients[i] * (seg.distances[i] - seg.distances[i-1]))
-            for seg in segment_profile.segments
-            for i in range(1, len(seg.gradients))
-        )
+    def _calculate_elevation_gain(self, profile: Profile) -> float:
+        """Calculate total positive elevation gain"""
+        if not profile.segments:
+            return 0
+            
+        total_gain = 0.0
+        prev_elevation = profile.segments[0].points[0].elevation
         
-    def _count_features(self, segment_profile):
+        for seg in profile.segments:
+            for point in seg.points:
+                if point.elevation > prev_elevation:
+                    total_gain += point.elevation - prev_elevation
+                prev_elevation = point.elevation
+                
+        return total_gain
+        
+    def _count_features(self, profile: Profile) -> Dict[str, int]:
+        """Count occurrences of each feature type"""
         counts = {ft.name: 0 for ft in TrailFeatureType}
-        for seg in segment_profile.segments:
+        
+        for seg in profile.segments:
             if seg.feature_type:
                 counts[seg.feature_type.name] += 1
             for sf in seg.short_features:
                 counts[sf.feature_type.name] += 1
+                
         return counts
+    
+    def _calculate_segment_stats(self, profile: Profile) -> Dict[str, Any]:
+        """Calculate statistics about different segment types"""
+        stats = {
+            'total_segments': len(profile.segments),
+            'steep_ascents': 0,
+            'steep_descents': 0,
+            'technical_sections': 0,
+            'flow_sections': 0
+        }
+        
+        for seg in profile.segments:
+            if seg.gradient_type == GradientSegmentType.STEEP_ASCENT:
+                stats['steep_ascents'] += 1
+            elif seg.gradient_type == GradientSegmentType.STEEP_DESCENT:
+                stats['steep_descents'] += 1
+                
+            if seg.feature_type in [TrailFeatureType.TECHNICAL_ASCENT, TrailFeatureType.TECHNICAL_DESCENT]:
+                stats['technical_sections'] += 1
+            elif seg.feature_type in [TrailFeatureType.FLOW_DESCENT, TrailFeatureType.ROLLER]:
+                stats['flow_sections'] += 1
+                
+        return stats
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert statistics to dictionary format"""
+        return {
+            'total_distance': self.total_distance,
+            'elevation_gain': self.elevation_gain,
+            'feature_counts': self.feature_counts,
+            'segment_stats': self.segment_stats
+        }
