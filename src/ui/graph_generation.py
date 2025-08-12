@@ -68,7 +68,7 @@ def create_elevation_profile_figure(profile: Profile,
     """Create elevation profile with baseline, median reference, and gradient visualization."""
     fig = go.Figure()
     
-    all_points = [p for s in profile.segments for p in s.points]
+    all_points = [p for p in profile.points]
     distances = [p.distance_from_origin for p in all_points]
     elevations = [p.elevation for p in all_points]
     baselines = [p.baseline for p in all_points]

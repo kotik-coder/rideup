@@ -2,7 +2,7 @@ from typing import Any, List, Dict, Optional
 import numpy as np
 
 from src.routes.spot import Spot
-from src.routes.profile_analyzer import Profile, Segment, StaticProfilePoint
+from src.routes.profile_analyzer import Profile, ProfileSegment
 from src.routes.route_processor import ProcessedRoute
 from src.routes.track import Track
 from src.routes.trail_features import *
@@ -14,7 +14,7 @@ def generate_route_profiles(spot: Spot, proute: ProcessedRoute, associated_track
     
     # Calculate additional statistics
     weather_mod = _calculate_weather_modifier(spot.weather)
-    surface_score = _calculate_surface_score(profile.segments[0], spot.terrain) if profile.segments else 0
+    surface_score = _calculate_surface_score(profile, spot.terrain) if profile.segments else 0
     difficulty = _determine_difficulty(profile, spot.system)
     
     stats = RouteStatistics(profile)
@@ -41,12 +41,13 @@ def _calculate_weather_modifier(weather: Optional[WeatherData]) -> float:
         return 1.15
     return 1.0
 
-def _calculate_surface_score(segment: Segment, terrain: TerrainAnalysis) -> float:
+def _calculate_surface_score(profile: Profile, terrain: TerrainAnalysis) -> float:
     """Calculate difficulty contribution from surface types"""
-    if not terrain.surface_types:
+    if not terrain.surface_types or not profile.segments:
         return 0
         
-    # Get surface weights from terrain analysis
+    # Get surface weights from terrain analysis using first segment's points
+    points = profile.segments[0].get_points(profile.points)
     surface_score = sum(
         proportion * TerrainAnalysis.SURFACE_WEIGHTS.get(surface.lower(), 1.0)
         for surface, proportion in terrain.surface_types.items()
@@ -67,17 +68,16 @@ def _determine_difficulty(profile: Profile, spot_system: RatingSystem) -> str:
     feature_score = 0
     
     # Calculate elevation components
-    total_distance = profile.segments[-1].distances[-1]
-    elev_gain = max(p.elevation for seg in profile.segments for p in seg.points) - \
-               min(p.elevation for seg in profile.segments for p in seg.points)
+    total_distance = profile.points[-1].distance_from_origin
+    elev_gain = max(p.elevation for p in profile.points) - min(p.elevation for p in profile.points)
     
     # Normalize elevation gain (100m per km is considered challenging)
     elevation_score = min((elev_gain / total_distance) * 1000, 10)  # Max 10 points
     
     # Analyze segments
     for seg in profile.segments:
-        seg_length = seg.length()
-        avg_grad = seg.avg_gradient()
+        seg_length = seg.length(profile.points)
+        avg_grad = seg.avg_gradient(profile.points)
         grad_percent = avg_grad * 100
         
         # Steepness scoring
@@ -93,7 +93,7 @@ def _determine_difficulty(profile: Profile, spot_system: RatingSystem) -> str:
         # Enhanced feature scoring using RatingSystem parameters
         if seg.feature_type:
             feature_config = seg.feature_type.get_config(spot_system)
-            feature_score += feature_config.get('difficulty_impact', 0) * (seg.length()/100)
+            feature_score += feature_config.get('difficulty_impact', 0) * (seg_length/100)
             
         # Score short features
         for sf in seg.short_features:
@@ -116,24 +116,23 @@ def _determine_difficulty(profile: Profile, spot_system: RatingSystem) -> str:
 class RouteStatistics:
     """Collects and calculates various statistics about the route"""
     def __init__(self, profile: Profile):
-        self.total_distance = profile.segments[-1].distances[-1] if profile.segments else 0
+        self.total_distance = profile.points[-1].distance_from_origin if profile.points else 0
         self.elevation_gain = self._calculate_elevation_gain(profile)
         self.feature_counts = self._count_features(profile)
         self.segment_stats = self._calculate_segment_stats(profile)
         
     def _calculate_elevation_gain(self, profile: Profile) -> float:
         """Calculate total positive elevation gain"""
-        if not profile.segments:
+        if not profile.points:
             return 0
             
         total_gain = 0.0
-        prev_elevation = profile.segments[0].points[0].elevation
+        prev_elevation = profile.points[0].elevation
         
-        for seg in profile.segments:
-            for point in seg.points:
-                if point.elevation > prev_elevation:
-                    total_gain += point.elevation - prev_elevation
-                prev_elevation = point.elevation
+        for point in profile.points[1:]:
+            if point.elevation > prev_elevation:
+                total_gain += point.elevation - prev_elevation
+            prev_elevation = point.elevation
                 
         return total_gain
         

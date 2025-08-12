@@ -6,7 +6,7 @@ import numpy as np
 import plotly.graph_objects as go
 
 from src.routes.spot import Spot
-from src.routes.profile_analyzer import Segment
+from src.routes.profile_analyzer import ProfilePoint, ProfileSegment
 from src.routes.route import Route
 from src.routes.route_processor import ProcessedRoute
 from src.ui.trail_style import get_arrow_size, get_feature_color, get_feature_description, get_feature_name, get_gradient_direction
@@ -212,10 +212,11 @@ def create_spot_info_card(spot: Spot):
 
 def create_route_info_card(route: Route, processed_route: ProcessedRoute, route_data: dict):
     """Optimized card with difficulty rating and enhanced elevation display"""
-    segments = route_data['segments'].segments
+    segments = route_data['profile'].segments
+    profile_points = route_data['profile'].points
     
     # Create visualization with direct segment objects
-    route_viz = create_segment_visualization(segments) if segments else None
+    route_viz = create_segment_visualization(segments, profile_points) if segments else None
     
     # Convert long distances to km
     def format_distance(meters):
@@ -246,14 +247,13 @@ def create_route_info_card(route: Route, processed_route: ProcessedRoute, route_
             if name not in feature_stats:
                 feature_stats[name] = {
                     'count': 0,
-                    'total_length': 0,
-                    'max_gradient': -float('inf'),
+                    'total_length': seg.length(profile_points),
+                    'avg_gradient': seg.avg_gradient(profile_points) * 100,
+                    'max_gradient': seg.max_gradient(profile_points) * 100,
                     'color': get_feature_color(seg),
                     'description': get_feature_description(seg.feature_type)
                 }
             feature_stats[name]['count'] += 1
-            feature_stats[name]['total_length'] += seg.length()
-            feature_stats[name]['avg_gradient'] = seg.avg_gradient() * 100
 
     return dbc.Card([
         dbc.CardHeader([
@@ -295,14 +295,15 @@ def create_route_info_card(route: Route, processed_route: ProcessedRoute, route_
         ], className="py-2")
     ])
 
-def create_segment_visualization(segments: List[Segment]):
+def create_segment_visualization(segments: List[ProfileSegment], profile_points: List[ProfilePoint]):
     """Create keyboard-style visualization with external tooltips"""
     fig = go.Figure()
     
     for i, seg in enumerate(segments):
         color = get_feature_color(seg)
-        arrow_size = get_arrow_size(seg)
-        direction = get_gradient_direction(seg.avg_gradient())
+        arrow_size = get_arrow_size(seg, profile_points)
+        direction = get_gradient_direction(seg, profile_points)
+        technical_score = seg.calculate_technical_score(seg.spot_system, profile_points) if hasattr(seg, 'spot_system') else None
                         
         # Main segment bar with ID for tooltip targeting
         fig.add_trace(go.Bar(
@@ -331,12 +332,13 @@ def create_segment_visualization(segments: List[Segment]):
             yanchor='middle'
         )
         
-        # Short features indicators (red circles below the bar)
+        # Short features indicators (colored circles below the bar)
         if seg.short_features:
             num_features = len(seg.short_features)
             spacing = 0.8 / max(num_features, 1)
             
             for j, feature in enumerate(seg.short_features):
+                feature_color = get_feature_color(feature)
                 fig.add_annotation(
                     x=i - 0.4 + (j + 0.5) * spacing,
                     y=-0.2,
@@ -344,7 +346,7 @@ def create_segment_visualization(segments: List[Segment]):
                     showarrow=False,
                     font=dict(
                         size=14,
-                        color='red'
+                        color=feature_color if feature_color else 'red'
                     ),
                     yanchor='middle'
                 )
@@ -367,7 +369,7 @@ def create_segment_visualization(segments: List[Segment]):
         style={
             'height': '60px',
             'width': '100%',
-            'cursor': 'pointer'  # Show pointer cursor to indicate interactivity
+            'cursor': 'pointer'
         }
     )
     
