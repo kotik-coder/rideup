@@ -99,8 +99,9 @@ class RatingSystem:
         }
     )
 
-    # Segment length parameters
-    min_segment_length: float = 50
+    # Segment identification parameters
+    min_segment_length: float = 50  # Minimum length in meters
+    min_segment_points: int = 5    # Minimum number of points
     min_steep_length: float = 10
     step_feature_max_length: float = 15
     

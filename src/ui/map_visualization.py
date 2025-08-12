@@ -2,6 +2,7 @@
 import plotly.graph_objects as go
 from typing import Dict, List
 
+from src.routes.profile_analyzer import Profile
 from src.ui.map_helpers import bounds_to_zoom, print_step
 from src.routes.route import Route
 from src.routes.route_processor import ProcessedRoute
@@ -56,7 +57,7 @@ def hide_base_route(fig: go.Figure,
                 trace.hoverinfo = 'none'
                 
 
-def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, route_profiles: dict, route: Route):
+def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, profile : Profile, route: Route):
     """
     Adds a performant, multi-layered route visualization to a Plotly figure.
     - Uses Scattermap instead of Scattermapbox
@@ -94,78 +95,77 @@ def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, route_profiles: 
     ))
 
     # 3. Highlighted segments
-    if 'segments' in route_profiles and route_profiles['segments']:
-        segment_profile = route_profiles['segments']
-        traces_data = {}
+    segment_profile = profile.segments
+    traces_data = {}
+    
+    for segment in segment_profile:
+        if segment.feature_type in color_map:
+            seg_type = segment.feature_type
+        elif segment.gradient_type in color_map:
+            seg_type = segment.gradient_type
+        else:
+            continue
         
-        for segment in segment_profile.segments:
-            if segment.feature_type in color_map:
-                seg_type = segment.feature_type
-            elif segment.gradient_type in color_map:
-                seg_type = segment.gradient_type
-            else:
-                continue
-            
-            start_idx = segment.start_index
-            end_idx = segment.end_index
-            
-            if seg_type not in traces_data:
-                traces_data[seg_type] = {
-                    'lon': [],
-                    'lat': [],
-                    'hovertext': [],
-                    'count': 0
-                }
-            
-            segment_points = r.smooth_points[start_idx:end_idx + 1]
-            
-            # Build comprehensive hover info
-            hover_info = (
-                f"<b>{seg_type.name.replace('_', ' ').title()}</b><br>"
-                f"Length: {segment.length():.0f}m<br>"
-                f"Avg gradient: {segment.avg_gradient()*100:.1f}%<br>"
-                f"Max gradient: {segment.max_gradient()*100:.1f}%"
-            )
-            
-            # Add short features if present
-            if segment.short_features:
-                hover_info += "<br><br><b>Short Features:</b>"
-                for feature in segment.short_features:
-                    hover_info += (
-                        f"<br>• {feature.feature_type.name.replace('_', ' ').title()}: "
-                        f"{feature.length:.1f}m, {feature.max_gradient*100:.1f}%"
-                    )
-            
-            # Add segment points
-            traces_data[seg_type]['lon'].extend(p.lon for p in segment_points)
-            traces_data[seg_type]['lat'].extend(p.lat for p in segment_points)
-            traces_data[seg_type]['hovertext'].extend([hover_info] * len(segment_points))
-            traces_data[seg_type]['count'] += 1
-            
-            # Add break between segments
-            traces_data[seg_type]['lon'].append(None)
-            traces_data[seg_type]['lat'].append(None)
-            traces_data[seg_type]['hovertext'].append(None)
+        start_idx = segment.start_index
+        end_idx = segment.end_index
+        
+        if seg_type not in traces_data:
+            traces_data[seg_type] = {
+                'lon': [],
+                'lat': [],
+                'hovertext': [],
+                'count': 0
+            }
+        
+        segment_points = r.smooth_points[start_idx:end_idx + 1]
+        
+        # Build comprehensive hover info
+        hover_info = (
+            f"<b>{seg_type.name.replace('_', ' ').title()}</b><br>"
+            f"Length: {segment.length(profile.points):.0f}m<br>"
+            f"Avg gradient: {segment.avg_gradient(profile.points)*100:.1f}%<br>"
+            f"Max gradient: {segment.max_gradient(profile.points)*100:.1f}%"
+        )
+        
+        # Add short features if present
+        if segment.short_features:
+            hover_info += "<br><br><b>Short Features:</b>"
+            for feature in segment.short_features:
+                hover_info += (
+                    f"<br>• {feature.feature_type.name.replace('_', ' ').title()}: "
+                    f"{feature.length:.1f}m, {feature.max_gradient*100:.1f}%"
+                )
+        
+        # Add segment points
+        traces_data[seg_type]['lon'].extend(p.lon for p in segment_points)
+        traces_data[seg_type]['lat'].extend(p.lat for p in segment_points)
+        traces_data[seg_type]['hovertext'].extend([hover_info] * len(segment_points))
+        traces_data[seg_type]['count'] += 1
+        
+        # Add break between segments
+        traces_data[seg_type]['lon'].append(None)
+        traces_data[seg_type]['lat'].append(None)
+        traces_data[seg_type]['hovertext'].append(None)
 
-        # Add traces with width variations
-        for seg_type, data in traces_data.items():
-            if data['count'] == 0:
-                continue
-                
-            fig.add_trace(go.Scattermap(
-                lon=data['lon'],
-                lat=data['lat'],
-                mode="lines",
-                line=dict(
-                    width=width_config['highlight'].get(seg_type.name, width_config['highlight']['default']),
-                    color=color_map[seg_type]
-                ),
-                hovertext=data['hovertext'],
-                hoverinfo="text",
-                name=seg_type.name.replace('_', ' ').title(),
-                legendgroup="segments",
-                showlegend=True
-            ))
+    # Add traces with width variations
+    for seg_type, data in traces_data.items():
+        if data['count'] == 0:
+            continue
+            
+        fig.add_trace(go.Scattermap(
+            lon=data['lon'],
+            lat=data['lat'],
+            mode="lines",
+            line=dict(
+                width=width_config['highlight'].get(seg_type.name, width_config['highlight']['default']),
+                color=color_map[seg_type]
+            ),
+            hovertext=data['hovertext'],
+            hoverinfo="text",
+            name=seg_type.name.replace('_', ' ').title(),
+            legendgroup="segments",
+            showlegend=True
+        ))
 
     add_checkpoints(fig, r)
 
@@ -312,7 +312,7 @@ def update_map_for_selected_route(current_map_figure: dict,
                                   route: Route,                                 
                                   processed_route: ProcessedRoute,
                                   map_dims : Dict[str,int],
-                                  profiles : dict) -> go.Figure:
+                                  profile : Profile) -> go.Figure:
     """
     Clears existing route traces and plots the fully processed route.
     Returns the updated figure.
@@ -339,7 +339,7 @@ def update_map_for_selected_route(current_map_figure: dict,
         # Fallback if dimensions aren't ready yet
         center_on_feature(fig, processed_route.bounds)
         
-    add_full_route_to_figure(fig, processed_route, profiles, route)
+    add_full_route_to_figure(fig, processed_route, profile, route)
     
     print_step("Map Drawing", f"Карта обновлена для выбранного маршрута: {route.name}")
     return fig

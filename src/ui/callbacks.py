@@ -122,7 +122,7 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
                                                            selected_route, 
                                                            processed_route, 
                                                            map_dims, 
-                                                           route_profiles)
+                                                           route_profiles['profile'])
         add_checkpoints(updated_map_figure, processed_route)
 
         checkpoint_info_ui = html.Div()
