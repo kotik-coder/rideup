@@ -1,7 +1,7 @@
 from typing import Any, List, Optional, Dict, Tuple
 import numpy as np
 from sklearn.cluster import DBSCAN
-from route_helpers import verify_uniform_sampling
+from src.routes.route_helpers import verify_uniform_sampling
 from src.routes.baseline import Baseline
 from src.routes.spot import RatingSystem
 from src.routes.route_processor import ProcessedRoute
@@ -32,9 +32,10 @@ class ProfilePoint(GeoPoint):
         self.baseline_gradient = baseline_gradient
         
     @staticmethod
-    def distance_between(a : 'ProfilePoint' , b : 'ProfilePoint'):
-        dist = b.distance_from_origin - a.distance_from_origin
-        return abs(dist)
+    def distance_between(points : List['ProfilePoint'], start, end):
+        dist = [ points[i].distance_from_origin - points[i-1].distance_from_origin 
+                for i in range(start + 1,end + 1)]
+        return np.sum(dist)
 
 class ProfileSegment:
     """A continuous trail segment referencing points in the parent Profile"""
@@ -57,7 +58,7 @@ class ProfileSegment:
     def length(self, profile_points: List[ProfilePoint]) -> float:
         """Get segment length in meters using parent profile points"""
         points = self.get_points(profile_points)
-        return sum([ ProfilePoint.distance_between(points[i], points[i - 1]) for i in range(1,len(profile_points)) ])
+        return ProfilePoint.distance_between(points, 0, len(points) - 1)
 
     def avg_gradient(self, profile_points: List[ProfilePoint]) -> float:
         """Calculate average gradient using parent profile points"""
@@ -161,60 +162,123 @@ class ProfileSegment:
                       for i in range(1, len(peaks))]
         return float(np.median(wavelengths)) if wavelengths else None
 
-    def create_subsegment(self, start_idx: int, end_idx: int) -> 'ProfileSegment':
-        """Create new segment from subset of points within this segment"""
-        if start_idx < self.start_index or end_idx > self.end_index:
-            raise ValueError("Subsegment indices must be within parent segment")
-            
-        return ProfileSegment(
-            start_idx=start_idx,
-            end_idx=end_idx,
-            gradient_type=self.gradient_type,
-            feature_type=self.feature_type
-        )
-
-    def truncate_to_feature(self, spot_system: RatingSystem, profile_points: List[ProfilePoint]) -> Optional['ProfileSegment']:
-        """Create a new segment truncated to just the feature portion"""
+    def split_to_match_feature(self, spot_system: RatingSystem, profile_points: List[ProfilePoint]) -> Tuple[Optional['ProfileSegment'], Optional['ProfileSegment']]:
+        """
+        Split the segment to isolate the most characteristic feature portion.
+        Returns:
+            - Tuple of (feature_segment, remaining_segment) where:
+                - feature_segment contains the most characteristic portion
+                - remaining_segment contains the rest of the original segment
+            - Returns (None, None) if no meaningful split can be made
+        """
         if not self.feature_type:
-            return None
-            
+            return None, None
+        
         config = self.feature_type.get_config(spot_system)
         max_length = config.get('max_length', float('inf'))
         
+        # If already within size limits, no split needed
         if self.length(profile_points) <= max_length:
-            return self
-            
-        # Calculate how much to truncate from each end
-        points = self.get_points(profile_points)
-        target_length = min(max_length, self.length(profile_points))
+            return self, None
         
-        # Find the most interesting part (highest gradient variance)
-        window_size = int(len(points) * 0.3)  # Look at 30% windows
-        max_variance = 0
+        points = self.get_points(profile_points)
+        segment_length = self.length(profile_points)
+        
+        # Determine the most characteristic portion based on feature type
+        if self.feature_type in [tft.ROLLER, tft.FLOW_DESCENT]:
+            # For oscillating features, find the portion with strongest periodicity
+            best_start, best_end = self._find_strongest_oscillation_portion(points)
+        elif self.feature_type in [tft.TECHNICAL_ASCENT, tft.TECHNICAL_DESCENT] and len(self.short_features) > 2:
+            # For technical sections, find the portion with most short features
+            best_start, best_end = self._find_feature_dense_portion(points)
+        else:
+            # For other features, find the portion with most extreme gradients
+            best_start, best_end = self._find_extreme_gradient_portion(points)
+        
+        # Ensure the selected portion meets minimum requirements
+        if best_end - best_start < spot_system.min_segment_points:
+            return None, None
+        
+        # Create the feature segment
+        feature_segment = self.create_subsegment(
+            self.start_index + best_start,
+            self.start_index + best_end
+        )
+        
+        # Create remaining segments (could be one or two parts)
+        remaining_segments = []
+        if best_start > 0:
+            remaining_segments.append(self.create_subsegment(
+                self.start_index,
+                self.start_index + best_start - 1
+            ))
+        if best_end < len(points) - 1:
+            remaining_segments.append(self.create_subsegment(
+                self.start_index + best_end + 1,
+                self.end_index
+            ))
+        
+        # Reclassify remaining segments
+        for seg in remaining_segments:
+            self._attempt_classify_technical(spot_system, seg)
+        
+        return feature_segment, remaining_segments[0] if remaining_segments else None
+
+    def _find_strongest_oscillation_portion(self, points: List[ProfilePoint]) -> Tuple[int, int]:
+        """Find the portion with strongest oscillation pattern"""
+        residuals = np.array([p.elevation - p.baseline for p in points])
+        
+        # Use wavelet transform to find most prominent oscillation section
+        widths = np.arange(1, len(points)//4)
+        cwt = signal.cwt(residuals, signal.ricker, widths)
+        power = np.sum(cwt**2, axis=0)
+        
+        # Find window with maximum oscillation power
+        window_size = min(len(points)//3, 50)  # Look at ~1/3 of segment or 50 points
+        max_power = 0
         best_start = 0
         
         for i in range(len(points) - window_size):
-            window_gradients = [p.gradient for p in points[i:i+window_size]]
-            current_variance = np.var(window_gradients)
-            if current_variance > max_variance:
-                max_variance = current_variance
+            current_power = np.sum(power[i:i+window_size])
+            if current_power > max_power:
+                max_power = current_power
                 best_start = i
         
-        best_start_idx  = self.start_index + best_start
+        return best_start, best_start + window_size
 
-        distances = [p.distance_to_origin for p in profile_points]
-
-        '''This assumes uniform spacing between points! 
-        Make sure that this rule is observed is consistenly within this module!'''
-        verify_uniform_sampling(distances)
-
-        uniform_spacing = distances[1] - distances[0]
-        best_end_idx = min(
-            best_start_idx + int(target_length / uniform_spacing),
-            self.end_index
-        )
+    def _find_feature_dense_portion(self, points: List[ProfilePoint]) -> Tuple[int, int]:
+        """Find the portion with highest concentration of short features"""
+        if not self.short_features:
+            return 0, len(points) - 1
         
-        return self.create_subsegment(best_start_idx, best_end_idx)
+        # Cluster feature locations
+        feature_midpoints = [(sf.start_index + sf.end_index)/2 for sf in self.short_features]
+        if len(feature_midpoints) > 1:
+            clustering = DBSCAN(eps=len(points)//4).fit(np.array(feature_midpoints).reshape(-1,1))
+            largest_cluster = np.argmax(np.bincount(clustering.labels_ + 1)) - 1
+            cluster_points = feature_midpoints[clustering.labels_ == largest_cluster]
+            cluster_start = int(min(cluster_points))
+            cluster_end = int(max(cluster_points))
+            return cluster_start, cluster_end
+        
+        # Single feature case
+        return self.short_features[0].start_index, self.short_features[0].end_index
+
+    def _find_extreme_gradient_portion(self, points: List[ProfilePoint]) -> Tuple[int, int]:
+        """Find the portion with most extreme gradients"""
+        gradients = np.array([p.baseline_gradient for p in points])
+        rolling_avg = np.convolve(gradients, np.ones(5)/5, mode='valid')
+        
+        if self.feature_type in [tft.STEEP_ASCENT, tft.TECHNICAL_ASCENT]:
+            extreme_idx = np.argmax(rolling_avg)
+        else:
+            extreme_idx = np.argmin(rolling_avg)
+        
+        window_size = min(len(points)//4, 30)  # Look at ~1/4 of segment or 30 points
+        start = max(0, extreme_idx - window_size//2)
+        end = min(len(points)-1, extreme_idx + window_size//2)
+        
+        return start, end
 
 class Profile:
 
@@ -245,6 +309,16 @@ class Profile:
             )
             for i, p in enumerate(proute.smooth_points)
         ]
+        
+    def _identify_features(self, baseline : Baseline, seg : ProfileSegment):
+        #focus on oscillating gradients first
+        if seg.gradient_oscillates(self.points):                
+            self._attempt_classify_roller(baseline, seg)                
+            
+        #then find extreme short features, if any
+        self._classify_local_features(seg)
+        #if needed, adjust technical difficulty for unclassified segments 
+        self._attempt_classify_technical(seg)        
     
     def _build_segments(self, baseline : Baseline) -> List[ProfileSegment]:
         """Construct and classify all segments"""
@@ -255,26 +329,18 @@ class Profile:
         
         for seg in raw_segments:
             
-            if seg.gradient_oscillates(self.points):
-                
-                is_roller = self.attempt_classify_roller(baseline, seg)
-                
-                if not is_roller:
-                    self.attempt_classify_technical(baseline, seg)
-                
-            self._classify_local_features(seg)
+            self._identify_features(baseline, seg)
             
             # Truncate segment if it's too long for its feature type
             if seg.feature_type:
-                truncated = seg.truncate_to_feature(self.spot_system, self.points)
+                truncated = seg.split_to_match_feature(self.spot_system, self.points)
                 if truncated:
                     processed_segments.append(truncated)
                     continue
                     
             processed_segments.append(seg)
         
-        #return self._merge_similar_segments(processed_segments)
-        return processed_segments
+        return self._merge_similar_segments(processed_segments)
 
     def _identify_baseline_segments(self) -> List[ProfileSegment]:
         """Identify segments using running average of baseline gradient"""
@@ -305,8 +371,9 @@ class Profile:
                 not current_verified_type.is_transitional_to(point_gradient_type)):
                 
                 segment_length = ProfilePoint.distance_between(
-                    self.points[current_start], 
-                    self.points[i-1]  # Previous point marks end of segment
+                    self.points,
+                    current_start, 
+                    i-1  # Previous point marks end of segment
                 )
                 segment_points = i - current_start
                 
@@ -334,31 +401,45 @@ class Profile:
         
         return segments
     
-    def attempt_classify_technical(self, baseline : Baseline, segment: ProfileSegment) -> bool:
+    def _attempt_classify_technical(self, segment: ProfileSegment) -> bool:        
+        
+        gtype = segment.gradient_type
+        ftype = segment.feature_type
+        
+        num_short_features = len(segment.short_features)
+
+        if not ftype and num_short_features >= 2:
+            
+            if gtype in [gst.ASCENT, gst.STEEP_ASCENT]:
+                segment.feature_type = tft.TECHNICAL_ASCENT
+                return True      
+                      
+            elif gtype in [gst.DESCENT, gst.STEEP_DESCENT]:
+                segment.feature_type = tft.TECHNICAL_DESCENT
+                return True
+        
         # Only assign technical features if they meet requirements
-        if segment.gradient_type in [gst.DESCENT, gst.STEEP_DESCENT]:
-            tech_descent = tft.TECHNICAL_DESCENT
-            tech_config = tech_descent.get_config(self.spot_system)
+        if gtype in [gst.DESCENT, gst.STEEP_DESCENT]:
+            tech_config = tft.TECHNICAL_DESCENT.get_config(self.spot_system)
             
             # Validate segment meets technical descent requirements
             if (segment.length(self.points) >= tech_config['min_length'] and
                 segment.avg_gradient(self.points) <= tech_config['gradient_range'][1]):                
-                segment.feature_type = tech_descent
+                segment.feature_type = tft.TECHNICAL_DESCENT
                 return True
         
-        elif segment.gradient_type in [gst.ASCENT, gst.STEEP_ASCENT]:
-            tech_ascent = tft.TECHNICAL_ASCENT
-            tech_config = tech_ascent.get_config(self.spot_system)
+        elif gtype in [gst.ASCENT, gst.STEEP_ASCENT]:
+            tech_config = tft.TECHNICAL_ASCENT.get_config(self.spot_system)
             
             # Validate segment meets technical ascent requirements
             if (segment.length(self.points) >= tech_config['min_length'] and
                 segment.avg_gradient(self.points) >= tech_config['gradient_range'][0]):
-                segment.feature_type = tech_ascent        
+                segment.feature_type = tft.TECHNICAL_ASCENT
                 return True
             
         return False
 
-    def attempt_classify_roller(self, baseline: Baseline, segment: ProfileSegment) -> bool:
+    def _attempt_classify_roller(self, baseline: Baseline, segment: ProfileSegment) -> bool:
         """Classify roller segments using wavelength analysis"""
         points = segment.get_points(self.points)
         distances = [p.distance_from_origin for p in points]
@@ -521,15 +602,7 @@ class Profile:
                     max_gradient=max_feature_gradient,
                     length=feature_length
                 )
-            ) 
-        
-        if not segment.feature_type and len(set(
-            (f.start_index, f.end_index) for f in segment.short_features
-        )) >= 2:
-            if segment.gradient_type in [gst.ASCENT, gst.STEEP_ASCENT]:
-                segment.feature_type = tft.TECHNICAL_ASCENT
-            elif segment.gradient_type in [gst.DESCENT, gst.STEEP_DESCENT]:
-                segment.feature_type = tft.TECHNICAL_DESCENT
+            )         
     
     def _merge_similar_segments(self, segments: List[ProfileSegment]) -> List[ProfileSegment]:
         """Merge adjacent compatible segments"""
@@ -549,8 +622,7 @@ class Profile:
                     else self.spot_system.min_segment_length * 10
                 )
                 
-                combined_length = ProfilePoint.distance_between(self.points[current.end_index],                                                                 
-                                                                self.points[last.start_index])
+                combined_length = ProfilePoint.distance_between(self.points, last.start_index, current.end_index)
                 
                 if combined_length <= max_len:
                     # Update the end index of the last segment
