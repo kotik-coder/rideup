@@ -1,6 +1,7 @@
 from typing import Any, List, Optional, Dict, Tuple
 import numpy as np
 from sklearn.cluster import DBSCAN
+from route_helpers import verify_uniform_sampling
 from src.routes.baseline import Baseline
 from src.routes.spot import RatingSystem
 from src.routes.route_processor import ProcessedRoute
@@ -56,7 +57,7 @@ class ProfileSegment:
     def length(self, profile_points: List[ProfilePoint]) -> float:
         """Get segment length in meters using parent profile points"""
         points = self.get_points(profile_points)
-        return ProfilePoint.distance_between(points[-1], points[0])
+        return sum([ ProfilePoint.distance_between(points[i], points[i - 1]) for i in range(1,len(profile_points)) ])
 
     def avg_gradient(self, profile_points: List[ProfilePoint]) -> float:
         """Calculate average gradient using parent profile points"""
@@ -199,9 +200,17 @@ class ProfileSegment:
                 max_variance = current_variance
                 best_start = i
         
-        best_start_idx = self.start_index + best_start
+        best_start_idx  = self.start_index + best_start
+
+        distances = [p.distance_to_origin for p in profile_points]
+
+        '''This assumes uniform spacing between points! 
+        Make sure that this rule is observed is consistenly within this module!'''
+        verify_uniform_sampling(distances)
+
+        uniform_spacing = distances[1] - distances[0]
         best_end_idx = min(
-            best_start_idx + int(target_length / ProfilePoint.distance_between(points[1], points[0])),
+            best_start_idx + int(target_length / uniform_spacing),
             self.end_index
         )
         
