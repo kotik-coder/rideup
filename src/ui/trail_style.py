@@ -1,7 +1,7 @@
 # trail_style.py
 from typing import Union, List, Dict
-from src.routes.profile_analyzer import ProfileSegment, ProfilePoint
-from src.routes.trail_features import GradientSegmentType, TrailFeatureType, ShortFeature
+from src.routes.profile_analyzer import Feature, ProfileSegment, ProfilePoint
+from src.routes.rating_system import GradientSegmentType, TrailFeatureType
 
 # Enhanced color configuration with new feature types and technical score visualization
 COLOR_MAP = {
@@ -79,10 +79,19 @@ def get_feature_description(feature_type: TrailFeatureType) -> str:
     }
     return DESCRIPTIONS.get(get_feature_name(feature_type), "Trail feature")
 
-def get_feature_color(segment: ProfileSegment, technical_score: float = None) -> str:
+def get_feature_color(feature: Feature, technical_score: float = None) -> str:
     """Get color based on segment features with optional technical score overlay"""
-    base_color = COLOR_MAP.get(segment.feature_type) if segment.feature_type else COLOR_MAP.get(segment.gradient_type)
+    base_color = COLOR_MAP.get(feature.feature_type)
+    return _blend_with_technical(base_color, technical_score)
+
+def get_segment_color(segment : ProfileSegment, technical_score: float = None) -> str:
+    if segment.feature:        
+        return get_feature_color(segment.feature, technical_score)
+    else:
+        base_color = COLOR_MAP.get(segment.gradient_type)
+        return _blend_with_technical(base_color, technical_score)
     
+def _blend_with_technical(base_color, technical_score):
     if technical_score is not None:
         # Blend with technical score color
         score_color = get_technical_score_color(technical_score)
@@ -115,9 +124,9 @@ def blend_colors(color1: str, color2: str, ratio: float) -> str:
     return f"rgba({int(r)}, {int(g)}, {int(b)}, {round(a, 2)})"
 
 def get_segment_name(segment: ProfileSegment) -> str:
-    """Get display name for segment considering short features"""
-    if segment.feature_type:
-        name = get_feature_name(segment.feature_type)
+    """Get display name for segment considering short features"""    
+    if segment.feature:
+        name = get_feature_name(segment.feature.feature_type)
         if segment.short_features:
             feature_types = {sf.feature_type for sf in segment.short_features}
             if len(feature_types) > 1:
@@ -139,12 +148,13 @@ def get_arrow_size(segment: ProfileSegment, profile_points: List[ProfilePoint], 
     gradient = abs(segment.avg_gradient(profile_points))
     
     # Feature-based sizing
-    if segment.feature_type:
-        if segment.feature_type in [TrailFeatureType.TECHNICAL_ASCENT, TrailFeatureType.TECHNICAL_DESCENT]:
+    if segment.feature:
+        ftype = segment.feature.feature_type
+        if ftype in [TrailFeatureType.TECHNICAL_ASCENT, TrailFeatureType.TECHNICAL_DESCENT]:
             base_size = 36
-        elif segment.feature_type in [TrailFeatureType.KICKER, TrailFeatureType.DROP]:
+        elif ftype in [TrailFeatureType.KICKER, TrailFeatureType.DROP]:
             base_size = 28
-        elif segment.feature_type == TrailFeatureType.SWITCHBACK:
+        elif ftype == TrailFeatureType.SWITCHBACK:
             base_size = 32
     
     # Gradient-based sizing
@@ -162,8 +172,8 @@ def get_segment_description(segment: ProfileSegment, profile_points: List[Profil
     description_parts = []
     
     # Main feature description
-    if segment.feature_type:
-        description_parts.append(get_feature_description(segment.feature_type))
+    if segment.feature:
+        description_parts.append(get_feature_description(segment.feature.feature_type))
     else:
         gradient = segment.avg_gradient(profile_points) * 100
         if gradient > 0:
@@ -235,8 +245,8 @@ def get_segment_width(segment: ProfileSegment) -> float:
     """Determine segment line width based on features and gradient"""
     base_width = WIDTH_CONFIG['base']
     
-    if segment.feature_type:
-        feature_name = segment.feature_type.name
+    if segment.feature:
+        feature_name = segment.feature.feature_type.name
         return WIDTH_CONFIG['highlight'].get(feature_name, WIDTH_CONFIG['highlight']['default'])
     
     gradient_type = segment.gradient_type.name

@@ -6,10 +6,10 @@ import numpy as np
 import plotly.graph_objects as go
 
 from src.routes.spot import Spot
-from src.routes.profile_analyzer import ProfilePoint, ProfileSegment
+from src.routes.profile_analyzer import Profile, ProfilePoint, ProfileSegment
 from src.routes.route import Route
 from src.routes.route_processor import ProcessedRoute
-from src.ui.trail_style import get_arrow_size, get_feature_color, get_feature_description, get_feature_name, get_gradient_direction
+from src.ui.trail_style import get_arrow_size, get_feature_color, get_feature_description, get_feature_name, get_gradient_direction, get_segment_color
 
 def create_spot_info_card(spot: Spot):
     """Compact spot card with enhanced weather display"""
@@ -212,11 +212,12 @@ def create_spot_info_card(spot: Spot):
 
 def create_route_info_card(route: Route, processed_route: ProcessedRoute, route_data: dict):
     """Optimized card with difficulty rating and enhanced elevation display"""
-    segments = route_data['profile'].segments
-    profile_points = route_data['profile'].points
+    profile        = route_data['profile']
+    segments       = profile.segments
+    profile_points = profile.points
     
     # Create visualization with direct segment objects
-    route_viz = create_segment_visualization(segments, profile_points) if segments else None
+    route_viz = create_segment_visualization(profile) if segments else None
     
     # Convert long distances to km
     def format_distance(meters):
@@ -242,16 +243,17 @@ def create_route_info_card(route: Route, processed_route: ProcessedRoute, route_
     # Create feature statistics with formatted distances
     feature_stats = {}
     for seg in segments:
-        if seg.feature_type:
-            name = get_feature_name(seg.feature_type)
+        if seg.feature:
+            ftype = seg.feature.feature_type
+            name = get_feature_name(ftype)
             if name not in feature_stats:
                 feature_stats[name] = {
                     'count': 0,
                     'total_length': seg.length(profile_points),
                     'avg_gradient': seg.avg_gradient(profile_points) * 100,
                     'max_gradient': seg.max_gradient(profile_points) * 100,
-                    'color': get_feature_color(seg),
-                    'description': get_feature_description(seg.feature_type)
+                    'color': get_feature_color(seg.feature),
+                    'description': get_feature_description(ftype)
                 }
             feature_stats[name]['count'] += 1
 
@@ -295,15 +297,18 @@ def create_route_info_card(route: Route, processed_route: ProcessedRoute, route_
         ], className="py-2")
     ])
 
-def create_segment_visualization(segments: List[ProfileSegment], profile_points: List[ProfilePoint]):
+def create_segment_visualization(profile : Profile):
     """Create keyboard-style visualization with external tooltips"""
     fig = go.Figure()
     
+    segments = profile.segments
+    profile_points = profile.points
+    
     for i, seg in enumerate(segments):
-        color = get_feature_color(seg)
+        color = get_segment_color(seg)
         arrow_size = get_arrow_size(seg, profile_points)
         direction = get_gradient_direction(seg, profile_points)
-        technical_score = seg.calculate_technical_score(seg.spot_system, profile_points) if hasattr(seg, 'spot_system') else None
+        technical_score = seg.calculate_technical_score(profile.spot_system, profile_points)
                         
         # Main segment bar with ID for tooltip targeting
         fig.add_trace(go.Bar(

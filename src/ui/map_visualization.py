@@ -99,8 +99,10 @@ def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, profile : Profil
     traces_data = {}
     
     for segment in segment_profile:
-        if segment.feature_type in color_map:
-            seg_type = segment.feature_type
+        if segment.feature:        
+            ftype = segment.feature.feature_type
+            if ftype in color_map:
+                seg_type = ftype
         elif segment.gradient_type in color_map:
             seg_type = segment.gradient_type
         else:
@@ -119,9 +121,11 @@ def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, profile : Profil
         
         segment_points = r.smooth_points[start_idx:end_idx + 1]
         
+        ttl = seg_type.title()
+        
         # Build comprehensive hover info
         hover_info = (
-            f"<b>{seg_type.name.replace('_', ' ').title()}</b><br>"
+            f"<b>{ttl}</b><br>"
             f"Length: {segment.length(profile.points):.0f}m<br>"
             f"Avg gradient: {segment.avg_gradient(profile.points)*100:.1f}%<br>"
             f"Max gradient: {segment.max_gradient(profile.points)*100:.1f}%"
@@ -131,9 +135,11 @@ def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, profile : Profil
         if segment.short_features:
             hover_info += "<br><br><b>Short Features:</b>"
             for feature in segment.short_features:
+                ftype = feature.feature_type
+                print(ftype.title())
                 hover_info += (
-                    f"<br>• {feature.feature_type.name.replace('_', ' ').title()}: "
-                    f"{feature.length:.1f}m, {feature.max_gradient*100:.1f}%"
+                    f"<br>• {ftype.title()}: "
+                    f"{feature.len:.1f}m, {feature.grade*100:.1f}%"
                 )
         
         # Add segment points

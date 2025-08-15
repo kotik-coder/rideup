@@ -5,7 +5,7 @@ from src.routes.spot import Spot
 from src.routes.profile_analyzer import Profile, ProfileSegment
 from src.routes.route_processor import ProcessedRoute
 from src.routes.track import Track
-from src.routes.trail_features import *
+from src.routes.rating_system import *
 from src.routes.terrain_and_weather import TerrainAnalysis, WeatherData
 
 def generate_route_profiles(spot: Spot, proute: ProcessedRoute, associated_tracks: List[Track]) -> Dict[str, Any]:
@@ -15,14 +15,11 @@ def generate_route_profiles(spot: Spot, proute: ProcessedRoute, associated_track
     # Calculate additional statistics
     weather_mod = _calculate_weather_modifier(spot.weather)
     surface_score = _calculate_surface_score(profile, spot.terrain) if profile.segments else 0
-    difficulty = _determine_difficulty(profile, spot.system)
-    
-    stats = RouteStatistics(profile)
+    difficulty = _determine_difficulty(profile, spot.system)    
     
     return {
         'profile': profile,
         'difficulty': difficulty,
-        'statistics': stats,
         'weather_modifier': weather_mod,
         'surface_score': surface_score
     }
@@ -91,14 +88,14 @@ def _determine_difficulty(profile: Profile, spot_system: RatingSystem) -> str:
             steepness_score += min(abs(grad_percent) / 10 * (seg_length/100), 2)
         
         # Enhanced feature scoring using RatingSystem parameters
-        if seg.feature_type:
-            feature_config = seg.feature_type.get_config(spot_system)
+        if seg.feature:
+            feature_config = seg.feature.feature_type.get_config(spot_system)
             feature_score += feature_config.get('difficulty_impact', 0) * (seg_length/100)
             
         # Score short features
         for sf in seg.short_features:
             sf_config = sf.feature_type.get_config(spot_system)
-            feature_score += sf_config.get('difficulty_impact', 0) * (sf.length/10)
+            feature_score += sf_config.get('difficulty_impact', 0) * (sf.length(seg, profile.points)/10)
     
     # Calculate total score (weighted components)
     total_score = (
@@ -112,70 +109,3 @@ def _determine_difficulty(profile: Profile, spot_system: RatingSystem) -> str:
 
     # Classify using spot system thresholds
     return RouteDifficulty.from_score(normalized_score, spot_system).name
-
-class RouteStatistics:
-    """Collects and calculates various statistics about the route"""
-    def __init__(self, profile: Profile):
-        self.total_distance = profile.points[-1].distance_from_origin if profile.points else 0
-        self.elevation_gain = self._calculate_elevation_gain(profile)
-        self.feature_counts = self._count_features(profile)
-        self.segment_stats = self._calculate_segment_stats(profile)
-        
-    def _calculate_elevation_gain(self, profile: Profile) -> float:
-        """Calculate total positive elevation gain"""
-        if not profile.points:
-            return 0
-            
-        total_gain = 0.0
-        prev_elevation = profile.points[0].elevation
-        
-        for point in profile.points[1:]:
-            if point.elevation > prev_elevation:
-                total_gain += point.elevation - prev_elevation
-            prev_elevation = point.elevation
-                
-        return total_gain
-        
-    def _count_features(self, profile: Profile) -> Dict[str, int]:
-        """Count occurrences of each feature type"""
-        counts = {ft.name: 0 for ft in TrailFeatureType}
-        
-        for seg in profile.segments:
-            if seg.feature_type:
-                counts[seg.feature_type.name] += 1
-            for sf in seg.short_features:
-                counts[sf.feature_type.name] += 1
-                
-        return counts
-    
-    def _calculate_segment_stats(self, profile: Profile) -> Dict[str, Any]:
-        """Calculate statistics about different segment types"""
-        stats = {
-            'total_segments': len(profile.segments),
-            'steep_ascents': 0,
-            'steep_descents': 0,
-            'technical_sections': 0,
-            'flow_sections': 0
-        }
-        
-        for seg in profile.segments:
-            if seg.gradient_type == GradientSegmentType.STEEP_ASCENT:
-                stats['steep_ascents'] += 1
-            elif seg.gradient_type == GradientSegmentType.STEEP_DESCENT:
-                stats['steep_descents'] += 1
-                
-            if seg.feature_type in [TrailFeatureType.TECHNICAL_ASCENT, TrailFeatureType.TECHNICAL_DESCENT]:
-                stats['technical_sections'] += 1
-            elif seg.feature_type in [TrailFeatureType.FLOW_DESCENT, TrailFeatureType.ROLLER]:
-                stats['flow_sections'] += 1
-                
-        return stats
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert statistics to dictionary format"""
-        return {
-            'total_distance': self.total_distance,
-            'elevation_gain': self.elevation_gain,
-            'feature_counts': self.feature_counts,
-            'segment_stats': self.segment_stats
-        }
