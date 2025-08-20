@@ -37,6 +37,12 @@ class ProfilePoint(GeoPoint):
         return np.sum(dist)
 
 class ProfileSegment:
+    
+    start_index : int
+    end_index   : int
+    gradient_type : gst
+    feature       : Optional['Feature']
+    short_features : List['Feature']
 
     """A continuous trail segment referencing points in the parent Profile"""
     def __init__(self, 
@@ -49,7 +55,6 @@ class ProfileSegment:
         self.gradient_type = gradient_type
         self.feature = feature
         self.short_features = []
-        self._technical_score = None
 
     def get_points(self, profile_points: List[ProfilePoint]) -> List[ProfilePoint]:
         """Get the points belonging to this segment from the parent profile"""
@@ -58,13 +63,14 @@ class ProfileSegment:
     def length(self, profile_points: List[ProfilePoint], start_index = 0, end_index = -1) -> float:
         """Get segment length in meters using parent profile points"""
         points = self.get_points(profile_points)
+        _len = len(points)
         
-        if end_index < 0:
-            end_index = len(points) - 1
+        if end_index < 0 or end_index > _len - 1:
+            end_index = _len - 1
             
         return ProfilePoint.distance_between(points, start_index, end_index)
 
-    def avg_gradient(self, profile_points: List[ProfilePoint]) -> float:
+    def grade(self, profile_points: List[ProfilePoint]) -> float:
         """Calculate average gradient using parent profile points"""
         points = self.get_points(profile_points)
         return np.mean([p.baseline_gradient for p in points])
@@ -82,7 +88,6 @@ class ProfileSegment:
         if self._technical_score is not None:
             return self._technical_score
             
-        points = self.get_points(profile_points)
         seg_length = self.length(profile_points)
         base_score = 0
         
@@ -98,7 +103,7 @@ class ProfileSegment:
         )
         
         # Gradient modifier
-        grad_mod = abs(self.avg_gradient(profile_points)) * 10
+        grad_mod = abs(self.grade(profile_points)) * 10
         if self.gradient_type in [gst.STEEP_ASCENT, gst.STEEP_DESCENT]:
             grad_mod *= 1.5
         
@@ -128,47 +133,16 @@ class ProfileSegment:
         
         return self.length(profile_points) >= min_length
 
-    def gradient_oscillates(self, profile_points: List[ProfilePoint]) -> bool:
+    def gradient_oscillates(self, profile_points: List[ProfilePoint], system : RatingSystem) -> bool:
         """Check if segment qualifies for roller analysis"""
         if self.gradient_type in (gst.STEEP_DESCENT, gst.STEEP_ASCENT):
             return False
         
-        points = self.get_points(profile_points)
+        points    = self.get_points(profile_points)
         gradients = [p.gradient for p in points]
         gradient_changes = np.diff(np.sign(gradients))
-        reversal_count = np.sum(np.abs(gradient_changes) > 0)
-        return reversal_count > 2
-
-    def get_feature_metrics(self, profile_points: List[ProfilePoint]) -> Dict[str, Any]:
-        """Get comprehensive feature metrics"""
-        points = self.get_points(profile_points)
-        metrics = {
-            'length': self.length(profile_points),
-            'avg_gradient': self.avg_gradient(profile_points),
-            'max_gradient': self.max_gradient(profile_points),
-            'elevation_change': points[-1].elevation - points[0].elevation,
-            'feature_type': self.feature.feature_type.name if self.feature else None,
-            'feature_count': len(self.short_features)
-        }
-        
-        if self.feature.feature_type in [tft.ROLLER, tft.FLOW_DESCENT]:
-            metrics['wavelength'] = self._calculate_wavelength(profile_points)
-        
-        return metrics
-
-    def _calculate_wavelength(self, profile_points: List[ProfilePoint]) -> Optional[float]:
-        """Calculate dominant wavelength for roller/flow segments"""
-        points = self.get_points(profile_points)
-        residuals = np.array([p.elevation - p.baseline for p in points])
-        distances = [p.distance_from_origin for p in points]
-        
-        peaks = argrelextrema(residuals, np.greater, order=2)[0]
-        if len(peaks) < 2:
-            return None
-            
-        wavelengths = [distances[peaks[i]] - distances[peaks[i-1]] 
-                      for i in range(1, len(peaks))]
-        return float(np.median(wavelengths)) if wavelengths else None
+        reversal_count   = np.sum(np.abs(gradient_changes) > 0)
+        return reversal_count >= system.num_oscillations_threshold
 
 @dataclass
 class Feature:
@@ -190,33 +164,30 @@ class Feature:
                         0, 
                         segment.end_index - segment.start_index,
                         len   = segment.length(points),
-                        grade = segment.avg_gradient(points)
+                        grade = segment.grade(points)
                        )
         
     def length(self, segment : ProfileSegment, points : List[ProfilePoint]):
-        len = segment.length(points, self.seg_start_index, self.seg_end_index)
-        return len
+        return segment.length(points, self.seg_start_index, self.seg_end_index)
 
     def validate(self, segment : ProfileSegment, 
                        points : List[ProfilePoint],
-                       rating_system: RatingSystem) -> bool:            
-        config = self.feature_type.get_config(rating_system)
-        
-        length = self.length(segment, points)
+                       rating_system: RatingSystem) -> bool:                            
+        config = self.feature_type.get_config(rating_system)        
+        self.len = self.length(segment, points)
         
         # Length validation
-        valid_length = (config['min_length'] <= length <= config['max_length'])
+        valid_length = (config['min_length'] <= self.len <= config['max_length'])
         
         # Gradient validation
         min_grad, max_grad = config['gradient_range']
-        self.grade = segment.avg_gradient(points)
+        self.grade = segment.grade(points)
         valid_gradient = (min_grad <= self.grade <= max_grad)
         
         # Compatibility check
         valid_combo = self.feature_type.is_compatible_with(segment.gradient_type, rating_system)
         
-        self._validated = valid_length and valid_gradient and valid_combo
-        return self._validated
+        return valid_length and valid_gradient and valid_combo
 
     def get_difficulty_score(self, segment : ProfileSegment, 
                                    points: List[ProfilePoint], 
@@ -226,33 +197,33 @@ class Feature:
         if not self.validate(segment, points, rating_system):
             return 0.0
             
-        config = self.feature_type.get_config(rating_system)
+        config     = self.feature_type.get_config(rating_system)
         base_score = config.get('difficulty_impact', 1.0)
         
         # Gradient modifier
-        grad_mod = 1 + abs(segment.avg_gradient(points) - config['gradient_range'][0]) * 2
+        grad_mod = 1 + abs(segment.grade(points) - config['gradient_range'][0]) * 2
         
         # Length modifier
-        length = segment.length(points)
+        length     = segment.length(points)
         length_mod = min(2.0, length / config['min_length'])
         
         return base_score * grad_mod * length_mod
 
 class Profile:
 
-    points : List[ProfilePoint]
-    segments : List[ProfileSegment]
+    points      : List[ProfilePoint]
+    segments    : List[ProfileSegment]
     spot_system : RatingSystem
 
     """Complete trail profile with classification and analysis"""
     def __init__(self, spot_system: RatingSystem, proute: ProcessedRoute):
         self.spot_system = spot_system
-        self.points = self._create_profile_points(proute)
-        self.segments = self._build_segments(proute.baseline)
+        self.points      = self._create_profile_points(proute)
+        self.segments    = self._build_segments(proute.baseline)
            
     def _create_profile_points(self, proute: ProcessedRoute) -> List[ProfilePoint]:
         """Generate profile points from processed route"""
-        t_values = np.linspace(0, 1, len(proute.smooth_points))
+        t_values  = np.linspace(0, 1, len(proute.smooth_points))
         gradients = [proute.get_gradient(t) for t in t_values]
         t = lambda i: proute.baseline.x[i]/proute.baseline.x[-1]
         
@@ -271,7 +242,7 @@ class Profile:
         
     def _identify_features(self, baseline : Baseline, seg : ProfileSegment):
         #focus on oscillating gradients first
-        if seg.gradient_oscillates(self.points):                
+        if seg.gradient_oscillates(self.points, self.spot_system):                
             self._attempt_classify_roller(baseline, seg)                
             
         #then find extreme short features, if any
@@ -291,20 +262,18 @@ class Profile:
             self._identify_features(baseline, seg)                                
             processed_segments.append(seg)
         
-        return raw_segments
+        return processed_segments
 
     def _identify_baseline_segments(self) -> List[ProfileSegment]:
         """Identify segments using running average of baseline gradient"""
-        if not self.points:
-            return []
-        
         segments = []
         current_start = 0
         current_avg_gradient = self.points[0].baseline_gradient
         
-        def meets_segment_requirements(segment_point_count: int, segment_length: float):
-            return (segment_point_count >= self.spot_system.min_segment_points and
-                    segment_length >= self.spot_system.min_segment_length)
+        def meets_segment_requirements(count: int, len: float):
+            min_points = self.spot_system.min_segment_points
+            min_length = self.spot_system.min_segment_length
+            return (count >= min_points and len >= min_length)
         
         for i in range(1, len(self.points)):
             point = self.points[i]
@@ -318,30 +287,26 @@ class Profile:
             point_gradient_type = gst.from_gradient(point.baseline_gradient, self.spot_system)
             
             # Check if we should create a new segment
-            if (current_verified_type != point_gradient_type and 
-                not current_verified_type.is_transitional_to(point_gradient_type)):
+            if (current_verified_type != point_gradient_type and                    #new point is not of the same type
+                not current_verified_type.is_transitional_to(point_gradient_type)): #and does not belong a transitional type
                 
-                segment_length = ProfilePoint.distance_between(
-                    self.points,
-                    current_start, 
-                    i-1  # Previous point marks end of segment
-                )
-                segment_points = i - current_start
-                
-                if meets_segment_requirements(segment_points, segment_length):
-                    segments.append(ProfileSegment(
+                new_segment = ProfileSegment(
                         start_idx=current_start,
                         end_idx=i-1,
                         gradient_type=current_verified_type
-                    ))
-                    
+                    )
+                segment_length = new_segment.length(self.points)
+                segment_points = i - current_start
+                
+                if meets_segment_requirements(segment_points, segment_length):
+                    segments.append(new_segment)                    
                     # Start new segment
                     current_start = i
                     current_avg_gradient = point.baseline_gradient
         
         # Add final segment
         if current_start < len(self.points):
-            final_avg_gradient = np.mean([p.baseline_gradient for p in self.points[current_start:]])
+            final_avg_gradient  = np.mean([p.baseline_gradient for p in self.points[current_start:]])
             final_verified_type = gst.from_gradient(final_avg_gradient, self.spot_system)
             
             segments.append(ProfileSegment(
@@ -368,7 +333,7 @@ class Profile:
         
         candidate = Feature.create_candidate_feature(segment, self.points, candidate_type)
         
-        #candidate exists -> check if it is a valid assumption
+        #candidate created -> check if it meets basic requirements
         if not candidate.validate(segment, self.points, rating_system):                    
             return False
                 
@@ -404,7 +369,7 @@ class Profile:
 
     def _get_extrema_based_wavelengths(self, residuals: List[float], distances: List[float]) -> List[float]:
         """Identify wavelengths from local extrema"""
-        peaks = argrelextrema(np.array(residuals), np.greater, order=2)[0]
+        peaks   = argrelextrema(np.array(residuals), np.greater, order=2)[0]
         troughs = argrelextrema(np.array(residuals), np.less, order=2)[0]
         extrema = np.sort(np.concatenate([peaks, troughs]))
         
@@ -431,7 +396,7 @@ class Profile:
         if not wavelengths:
             return False
         
-        gradient_type_name = segment.gradient_type.name
+        gradient_type_name  = segment.gradient_type.name
         compatible_features = self.spot_system.get_compatible_features(gradient_type_name)
         
         for w in sorted(wavelengths):
@@ -470,10 +435,10 @@ class Profile:
         if segment.short_features and len(segment.short_features) > 0:
             segment.short_features.clear()
             
-        points = segment.get_points(self.points)
-        gradients = np.array([p.gradient for p in points])
-        distances = np.array([p.distance_from_origin for p in points])
-        avg_gradient = segment.avg_gradient(self.points)
+        points       = segment.get_points(self.points)
+        gradients    = np.array([p.gradient for p in points])
+        distances    = np.array([p.distance_from_origin for p in points])
+        avg_gradient = segment.grade(self.points)
         gradient_std = np.std(gradients)
         
         upper_threshold = avg_gradient + (2 * gradient_std)
@@ -509,7 +474,7 @@ class Profile:
             if existing:
                 continue
                 
-            steep_ascent_min = gst.STEEP_ASCENT.get_thresholds(self.spot_system)[0]
+            steep_ascent_min  = gst.STEEP_ASCENT.get_thresholds(self.spot_system)[0]
             steep_descent_max = gst.STEEP_DESCENT.get_thresholds(self.spot_system)[1]
             
             if avg_feature_gradient > steep_ascent_min:
@@ -541,22 +506,3 @@ class Profile:
     def calculate_total_technical_score(self) -> float:
         """Calculate total technical difficulty score for entire profile"""
         return sum(seg.calculate_technical_score(self.spot_system, self.points) for seg in self.segments)
-    
-    def get_feature_density(self, feature_type: tft) -> float:
-        """Calculate density of specific feature type (meters per km)"""
-        total_feature_length = sum(
-            seg.length(self.points) for seg in self.segments 
-            if seg.feature.feature_type == feature_type
-        )
-        total_length = self.points[-1].distance_from_origin
-        return (total_feature_length / total_length) * 1000 if total_length > 0 else 0    
-    
-    def find_steepest_section(self, min_length=50) -> Optional[ProfileSegment]:
-        """Find the steepest continuous section meeting length requirements"""
-        candidates = []
-        for seg in self.segments:
-            if seg.length(self.points) >= min_length:
-                steepness = abs(seg.avg_gradient(self.points))
-                candidates.append((steepness, seg))
-        
-        return max(candidates, key=lambda x: x[0])[1] if candidates else None

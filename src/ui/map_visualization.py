@@ -127,7 +127,7 @@ def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, profile : Profil
         hover_info = (
             f"<b>{ttl}</b><br>"
             f"Length: {segment.length(profile.points):.0f}m<br>"
-            f"Avg gradient: {segment.avg_gradient(profile.points)*100:.1f}%<br>"
+            f"Grade: {segment.grade(profile.points)*100:.1f}%<br>"
             f"Max gradient: {segment.max_gradient(profile.points)*100:.1f}%"
         )
         

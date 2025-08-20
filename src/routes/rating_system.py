@@ -47,6 +47,7 @@ class RatingSystem:
                 "min_length": 15,
                 "max_length": 30,
                 "gradient_range": (-0.25, -0.15),
+                "angular_displacement": 120,
                 "difficulty_impact": 2.0
             },
             "TECHNICAL_DESCENT": {
@@ -98,6 +99,8 @@ class RatingSystem:
     # Wavelength parameters
     wavelength_clustering_eps: float = 0.5
     wavelength_match_tolerance: float = 0.3
+    
+    num_oscillations_threshold: int = 3
     
     feature_threshold: float = 0.7  # Minimum score for roller/flow features
     technical_threshold: float = 5.0  # Minimum score for technical features

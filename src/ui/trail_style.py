@@ -145,7 +145,7 @@ def get_segment_name(segment: ProfileSegment) -> str:
 def get_arrow_size(segment: ProfileSegment, profile_points: List[ProfilePoint], technical_score: float = None) -> int:
     """Smart arrow sizing based on segment characteristics and technical score"""
     base_size = 24
-    gradient = abs(segment.avg_gradient(profile_points))
+    gradient = abs(segment.grade(profile_points))
     
     # Feature-based sizing
     if segment.feature:
@@ -175,7 +175,7 @@ def get_segment_description(segment: ProfileSegment, profile_points: List[Profil
     if segment.feature:
         description_parts.append(get_feature_description(segment.feature.feature_type))
     else:
-        gradient = segment.avg_gradient(profile_points) * 100
+        gradient = segment.grade(profile_points) * 100
         if gradient > 0:
             description_parts.append(f"Gradual ascent ({gradient:.1f}% grade)")
         else:
@@ -205,7 +205,7 @@ def get_segment_description(segment: ProfileSegment, profile_points: List[Profil
 
 def get_gradient_direction(segment: ProfileSegment, profile_points: List[ProfilePoint]) -> str:
     """Enhanced arrow direction based on gradient"""
-    gradient = segment.avg_gradient(profile_points)
+    gradient = segment.grade(profile_points)
     
     if gradient > 0.10: return '⤊'  # Steep ascent
     if gradient > 0.05: return '↑'  # Ascent

@@ -250,7 +250,7 @@ def create_route_info_card(route: Route, processed_route: ProcessedRoute, route_
                 feature_stats[name] = {
                     'count': 0,
                     'total_length': seg.length(profile_points),
-                    'avg_gradient': seg.avg_gradient(profile_points) * 100,
+                    'avg_gradient': seg.grade(profile_points) * 100,
                     'max_gradient': seg.max_gradient(profile_points) * 100,
                     'color': get_feature_color(seg.feature),
                     'description': get_feature_description(ftype)
@@ -308,7 +308,6 @@ def create_segment_visualization(profile : Profile):
         color = get_segment_color(seg)
         arrow_size = get_arrow_size(seg, profile_points)
         direction = get_gradient_direction(seg, profile_points)
-        technical_score = seg.calculate_technical_score(profile.spot_system, profile_points)
                         
         # Main segment bar with ID for tooltip targeting
         fig.add_trace(go.Bar(
