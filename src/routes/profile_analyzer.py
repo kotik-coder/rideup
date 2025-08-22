@@ -158,6 +158,50 @@ class Feature:
         return (segment_start + self.seg_start_index, 
                 segment_start + self.seg_end_index)                
         
+    def find_tightest_boundaries(self, 
+                                profile: 'Profile',
+                                segment: ProfileSegment, 
+                                baseline: Baseline,
+                                classification_method) -> Tuple[int, int]:
+        """
+        Find the closest valid start and end indices where the feature is still observed.
+        Uses binary search for efficient boundary finding.
+        classification_method(profile, test_feature, segment, baseline): A function that returns True if the feature is valid at given indices        
+        """
+        # Binary search for tightest start index
+        def find_max_start(low, high):
+            result = low
+            while low <= high:
+                mid = (low + high) // 2
+                test_feature     = Feature(self.feature_type, mid, self.seg_end_index, len=0, grade=0)
+                if classification_method(profile, test_feature, segment, baseline):
+                    result = mid      # valid, so update result
+                    low = mid + 1     # try moving start further right
+                else:
+                    high = mid - 1    # too far, move left
+            return result
+
+        # Binary search for tightest end index
+        def find_min_end(low, high, start_index):
+            result = high
+            while low <= high:
+                mid = (low + high) // 2
+                test_feature = Feature(self.feature_type, start_index, mid, len=0, grade=0)
+                if classification_method(profile, test_feature, segment, baseline):
+                    result = mid      # valid, so update result
+                    high = mid - 1    # try moving end further left
+                else:
+                    low = mid + 1     # too far left, move right
+            return result
+
+        # Find tightest start index first
+        max_start = find_max_start(self.seg_start_index, self.seg_end_index)
+        
+        # Then find tightest end index based on the found start
+        min_end   = find_min_end(max_start, self.seg_end_index, max_start)
+        
+        return max_start, min_end
+        
     @staticmethod
     def create_candidate_feature(segment : ProfileSegment, points : List[ProfilePoint], feature_type : tft) -> 'Feature': 
         return Feature(feature_type,
@@ -240,15 +284,27 @@ class Profile:
             for i, p in enumerate(proute.smooth_points)
         ]
         
-    def _identify_features(self, baseline : Baseline, seg : ProfileSegment):
+    @staticmethod
+    def is_feature_conserved(p : 'Profile', feature: Feature, seg : ProfileSegment, bl : Baseline) -> bool:
+        validated = feature.validate(seg, p.points, p.spot_system)
+        identified_feature = p._identify_feature(bl, seg)
+        return validated and \
+               identified_feature.feature_type == feature.feature_type
+        
+    def _identify_feature(self, baseline : Baseline, seg : ProfileSegment) -> Optional[Feature]:
         #focus on oscillating gradients first
+        ftr = None
         if seg.gradient_oscillates(self.points, self.spot_system):                
-            self._attempt_classify_roller(baseline, seg)                
+            ftr = self._attempt_classify_roller(baseline, seg)                
             
         #then find extreme short features, if any
-        self._classify_local_features(seg)
+        self._classify_local_features(seg)        
+        
         #if needed, adjust technical difficulty for unclassified segments 
-        self._attempt_classify_technical(seg, self.spot_system)        
+        if not ftr: 
+            ftr = self._attempt_classify_technical(seg, self.spot_system)        
+        
+        return ftr        
     
     def _build_segments(self, baseline : Baseline) -> List[ProfileSegment]:
         """Construct and classify all segments"""
@@ -259,7 +315,15 @@ class Profile:
         
         for seg in raw_segments:
             
-            self._identify_features(baseline, seg)                                
+            original_feature = self._identify_feature(baseline, seg)            
+            if original_feature:
+                start, end = \
+                    original_feature.find_tightest_boundaries(self, 
+                                                              seg, 
+                                                              baseline, 
+                                                              Profile.is_feature_conserved)                                                    
+                print(f"{start} -- {end}")
+             
             processed_segments.append(seg)
         
         return processed_segments
@@ -317,7 +381,7 @@ class Profile:
         
         return segments
     
-    def _attempt_classify_technical(self, segment: ProfileSegment, rating_system : RatingSystem) -> bool:        
+    def _attempt_classify_technical(self, segment: ProfileSegment, rating_system : RatingSystem) -> Optional[Feature]:        
         
         gtype = segment.gradient_type
 
@@ -329,19 +393,17 @@ class Profile:
             candidate_type = tft.TECHNICAL_DESCENT
         #none
         else:
-            return False
+            return None
         
         candidate = Feature.create_candidate_feature(segment, self.points, candidate_type)
         
         #candidate created -> check if it meets basic requirements
         if not candidate.validate(segment, self.points, rating_system):                    
-            return False
+            return None
                 
-        #assign to dominant feature
-        segment.feature = candidate
-        return True
+        return candidate
 
-    def _attempt_classify_roller(self, baseline: Baseline, segment: ProfileSegment) -> bool:
+    def _attempt_classify_roller(self, baseline: Baseline, segment: ProfileSegment) -> Optional[Feature]:
         """Classify roller segments using wavelength analysis"""
         points = segment.get_points(self.points)
         distances = [p.distance_from_origin for p in points]
@@ -391,10 +453,10 @@ class Profile:
         
         return list({round((fft+ext)/2, 1) for fft, ext in matches}) if matches else []
 
-    def _classify_by_wavelength_patterns(self, segment: ProfileSegment, wavelengths: List[float]) -> bool:
+    def _classify_by_wavelength_patterns(self, segment: ProfileSegment, wavelengths: List[float]) -> Optional[Feature]:
         
         if not wavelengths:
-            return False
+            return None
         
         gradient_type_name  = segment.gradient_type.name
         compatible_features = self.spot_system.get_compatible_features(gradient_type_name)
@@ -409,10 +471,9 @@ class Profile:
                 
                 if ('wavelength_range' in config and 
                     config['wavelength_range'][0] <= w <= config['wavelength_range'][1]):
-                    segment.feature = Feature.create_candidate_feature(segment, self.points, feature_type)
-                    return True
+                    return Feature.create_candidate_feature(segment, self.points, feature_type)
                 
-        return False
+        return None
 
     def _cluster_wavelengths(self, raw_wavelengths: List[float], eps: float = 0.5) -> List[float]:
         """Cluster similar wavelengths"""
