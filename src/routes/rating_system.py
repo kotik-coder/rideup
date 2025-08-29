@@ -31,7 +31,7 @@ class RatingSystem:
         default_factory=lambda: {
             "ROLLER": {
                 "min_length": 50,
-                "max_length": 500,
+                "max_length": 250,
                 "gradient_range": (-0.05, 0.05),
                 "wavelength_range": (10, 50),  # Added for roller
                 "difficulty_impact": 1.5
@@ -44,22 +44,22 @@ class RatingSystem:
                 "difficulty_impact": 1.2
             },
             "SWITCHBACK": {
-                "min_length": 15,
+                "min_length": 5,
                 "max_length": 30,
                 "gradient_range": (-0.25, -0.15),
                 "angular_displacement": 120,
                 "difficulty_impact": 2.0
             },
             "TECHNICAL_DESCENT": {
-                "min_length": 5,
-                "max_length": 500,
+                "min_length": 10,
+                "max_length": 250,
                 "gradient_range": (-float('inf'), -0.15),
                 "required_short_features": 2,
                 "difficulty_impact": 3.0
             },
             "TECHNICAL_ASCENT": {
-                "min_length": 5,
-                "max_length": 200,
+                "min_length": 10,
+                "max_length": 250,
                 "gradient_range": (0.15, float('inf')),
                 "required_short_features": 2,
                 "difficulty_impact": 2.5

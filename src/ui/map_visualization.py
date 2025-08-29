@@ -136,7 +136,6 @@ def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, profile : Profil
             hover_info += "<br><br><b>Short Features:</b>"
             for feature in segment.short_features:
                 ftype = feature.feature_type
-                print(ftype.title())
                 hover_info += (
                     f"<br>• {ftype.title()}: "
                     f"{feature.len:.1f}m, {feature.grade*100:.1f}%"
