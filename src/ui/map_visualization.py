@@ -108,8 +108,8 @@ def add_full_route_to_figure(fig: go.Figure, r: ProcessedRoute, profile : Profil
         else:
             continue
         
-        start_idx = segment.start_index
-        end_idx = segment.end_index
+        start_idx = segment.start_abs_idx
+        end_idx = segment.end_abs_idx
         
         if seg_type not in traces_data:
             traces_data[seg_type] = {

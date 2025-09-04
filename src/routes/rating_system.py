@@ -6,13 +6,13 @@ from typing import Any, Dict, List, Optional, Tuple
 class RatingSystem:
     """Central configuration for all trail parameters including features and gradients"""
     # Gradient thresholds
-    gradient_thresholds: Dict[str, Tuple[float, float]] = field(
+    gradient_thresholds: Dict['GradientSegmentType', Tuple[float, float]] = field(
         default_factory=lambda: {
-            "ASCENT": (0.01, 0.10),
-            "DESCENT": (-0.10, -0.01),
-            "STEEP_ASCENT": (0.10, float('inf')),
-            "STEEP_DESCENT": (-float('inf'), -0.10),
-            "FLAT": (-0.01, 0.01)
+            GradientSegmentType.ASCENT: (0.01, 0.10),
+            GradientSegmentType.DESCENT: (-0.10, -0.01),
+            GradientSegmentType.STEEP_ASCENT: (0.10, float('inf')),
+            GradientSegmentType.STEEP_DESCENT: (-float('inf'), -0.10),
+            GradientSegmentType.FLAT: (-0.01, 0.01)
         }
     )
     
@@ -27,50 +27,50 @@ class RatingSystem:
     )
 
     # Feature parameters
-    feature_parameters: Dict[str, Dict[str, Any]] = field(
+    feature_parameters: Dict['TrailFeatureType', Dict[str, Any]] = field(
         default_factory=lambda: {
-            "ROLLER": {
+            TrailFeatureType.ROLLER: {
                 "min_length": 50,
                 "max_length": 250,
                 "gradient_range": (-0.05, 0.05),
                 "wavelength_range": (10, 50),  # Added for roller
                 "difficulty_impact": 1.5
             },
-            "FLOW_DESCENT": {
+            TrailFeatureType.FLOW_DESCENT: {
                 "min_length": 50,
                 "max_length": 500,
-                "gradient_range": (-0.12, -0.05),
+                "gradient_range": (-0.12, -0.025),
                 "wavelength_range": (10, 50),  # Already existed
                 "difficulty_impact": 1.2
             },
-            "SWITCHBACK": {
+            TrailFeatureType.SWITCHBACK: {
                 "min_length": 5,
                 "max_length": 30,
                 "gradient_range": (-0.25, -0.15),
                 "angular_displacement": 120,
                 "difficulty_impact": 2.0
             },
-            "TECHNICAL_DESCENT": {
+            TrailFeatureType.TECHNICAL_DESCENT: {
                 "min_length": 10,
                 "max_length": 250,
                 "gradient_range": (-float('inf'), -0.15),
                 "required_short_features": 2,
                 "difficulty_impact": 3.0
             },
-            "TECHNICAL_ASCENT": {
+            TrailFeatureType.TECHNICAL_ASCENT: {
                 "min_length": 10,
                 "max_length": 250,
                 "gradient_range": (0.15, float('inf')),
                 "required_short_features": 2,
                 "difficulty_impact": 2.5
             },
-            "KICKER": {
+            TrailFeatureType.KICKER: {
                 "min_length": 1,
                 "max_length": 10,
                 "gradient_range": (-0.3, -0.15),
                 "difficulty_impact": 2.5
             },
-            "DROP": {
+            TrailFeatureType.DROP: {
                 "min_length": 1,
                 "max_length": 8,
                 "gradient_range": (-float('inf'), -0.25),
@@ -80,13 +80,13 @@ class RatingSystem:
     )
 
     # Feature compatibility with gradient types
-    feature_compatibility: Dict[str, List[str]] = field(
+    feature_compatibility: Dict['GradientSegmentType', List['TrailFeatureType']] = field(
         default_factory=lambda: {
-            "ASCENT": ["TECHNICAL_ASCENT"],
-            "DESCENT": ["TECHNICAL_DESCENT", "FLOW_DESCENT", "SWITCHBACK"],
-            "STEEP_ASCENT": ["TECHNICAL_ASCENT"],
-            "STEEP_DESCENT": ["TECHNICAL_DESCENT", "DROP", "KICKER"],
-            "FLAT": []
+            GradientSegmentType.ASCENT: [TrailFeatureType.TECHNICAL_ASCENT],
+            GradientSegmentType.DESCENT: [TrailFeatureType.TECHNICAL_DESCENT, TrailFeatureType.FLOW_DESCENT, TrailFeatureType.SWITCHBACK],
+            GradientSegmentType.STEEP_ASCENT: [TrailFeatureType.TECHNICAL_ASCENT],
+            GradientSegmentType.STEEP_DESCENT: [TrailFeatureType.TECHNICAL_DESCENT, TrailFeatureType.DROP, TrailFeatureType.KICKER],
+            GradientSegmentType.FLAT: []
         }
     )
 
@@ -124,15 +124,15 @@ class RatingSystem:
                 
         return errors
 
-    def get_feature_config(self, feature_type: str) -> Dict[str, Any]:
+    def get_feature_config(self, feature_type: 'TrailFeatureType') -> Dict[str, Any]:
         """Get configuration for a specific feature type"""
         return self.feature_parameters.get(feature_type, {})
 
-    def get_compatible_features(self, gradient_type: str) -> List[str]:
+    def get_compatible_features(self, gradient_type: 'GradientSegmentType') -> List['TrailFeatureType']:
         """Get features that can occur on this gradient type"""
         return self.feature_compatibility.get(gradient_type, [])
 
-    def is_feature_compatible(self, feature_type: str, gradient_type: str) -> bool:
+    def is_feature_compatible(self, feature_type: 'TrailFeatureType', gradient_type: 'GradientSegmentType') -> bool:
         """Check if a feature type is compatible with a gradient type"""
         return feature_type in self.feature_compatibility.get(gradient_type, [])
 
@@ -155,18 +155,18 @@ class RatingSystem:
 
 class GradientSegmentType(Enum):
     """Classification of gradient segments with enhanced transition logic"""
-    ASCENT = "ASCENT"
-    DESCENT = "DESCENT" 
-    STEEP_ASCENT = "STEEP_ASCENT"
-    STEEP_DESCENT = "STEEP_DESCENT"
-    FLAT = "FLAT"
+    ASCENT = auto()
+    DESCENT = auto()
+    STEEP_ASCENT = auto()
+    STEEP_DESCENT = auto()
+    FLAT = auto()
     
     def title(self):
         return self.name.replace('_', ' ').title()
 
     def get_thresholds(self, spot_system: RatingSystem) -> Tuple[float, float]:
         """Get thresholds from RatingSystem configuration"""
-        return spot_system.gradient_thresholds[self.value]
+        return spot_system.gradient_thresholds[self]
 
     @classmethod
     def from_gradient(cls, gradient: float, spot_system: RatingSystem) -> 'GradientSegmentType':
@@ -203,7 +203,7 @@ class TrailFeatureType(Enum):
 
     def get_config(self, rating_system: RatingSystem) -> Dict[str, Any]:
         """Get feature parameters with validation"""
-        config = rating_system.get_feature_config(self.name)
+        config = rating_system.get_feature_config(self)
         # Ensure required fields exist
         config.setdefault('min_length', 1)
         config.setdefault('max_length', 100)
@@ -212,7 +212,7 @@ class TrailFeatureType(Enum):
 
     def is_compatible_with(self, gradient_type: GradientSegmentType, rating_system: RatingSystem) -> bool:
         """Check compatibility with additional physical constraints"""
-        if not rating_system.is_feature_compatible(self.name, gradient_type.name):
+        if not rating_system.is_feature_compatible(self, gradient_type):
             return False
             
         # Additional physical constraints

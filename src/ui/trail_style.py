@@ -217,7 +217,7 @@ def get_short_feature_markers(segment: ProfileSegment, points: List[ProfilePoint
     """Generate visualization markers for short features in a segment"""
     markers = []
     for sf in segment.short_features:
-        start_idx, end_idx = sf.get_absolute_indices(segment.start_index)
+        start_idx, end_idx = sf.get_absolute_indices(segment.start_abs_idx)
         feature_points = points[start_idx:end_idx+1]
         
         markers.append({
