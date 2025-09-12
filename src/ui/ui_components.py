@@ -9,7 +9,7 @@ from src.routes.spot import Spot
 from src.routes.profile_analyzer import Profile, ProfilePoint, ProfileSegment
 from src.routes.route import Route
 from src.routes.route_processor import ProcessedRoute
-from src.ui.trail_style import get_arrow_size, get_feature_color, get_feature_description, get_feature_name, get_gradient_direction, get_segment_color
+from src.ui.trail_style import get_arrow_size, get_feature_color, get_feature_description, get_feature_icon, get_feature_name, get_gradient_direction, get_segment_color, get_segment_description
 
 def create_spot_info_card(spot: Spot):
     """Compact spot card with enhanced weather display"""
@@ -240,23 +240,42 @@ def create_route_info_card(route: Route, processed_route: ProcessedRoute, route_
         'DOUBLE_BLACK': 'danger'
     }.get(difficulty, 'secondary')
     
-    # Create feature statistics with formatted distances
+    # Create feature statistics with formatted distances - FIXED
     feature_stats = {}
+    short_feature_stats = {}
+    
     for seg in segments:
+        # Process long features
         if seg.feature:
             ftype = seg.feature.feature_type
             name = get_feature_name(ftype)
+            feature_length = seg.feature.length(seg, profile_points)
+            
             if name not in feature_stats:
                 feature_stats[name] = {
                     'count': 0,
-                    'total_length': seg.length(profile_points),
-                    'avg_gradient': seg.grade(profile_points) * 100,
-                    'max_gradient': seg.max_gradient(profile_points) * 100,
+                    'total_length': 0,
                     'color': get_feature_color(seg.feature),
                     'description': get_feature_description(ftype)
                 }
+            
             feature_stats[name]['count'] += 1
-
+            feature_stats[name]['total_length'] += feature_length
+        
+        # Process short features
+        for sf in seg.short_features:
+            sf_type = sf.feature_type
+            sf_name = get_feature_name(sf_type)
+            
+            if sf_name not in short_feature_stats:
+                short_feature_stats[sf_name] = {
+                    'count': 0,
+                    'color': get_feature_color(sf),
+                    'description': get_feature_description(sf_type)
+                }
+            
+            short_feature_stats[sf_name]['count'] += 1
+    
     return dbc.Card([
         dbc.CardHeader([
             html.Div(route.name, className="fw-bold d-inline"),
@@ -287,131 +306,26 @@ def create_route_info_card(route: Route, processed_route: ProcessedRoute, route_
             html.H5("Route Profile", className="mt-3 mb-2 fs-6"),
             html.Div(route_viz, className="mb-3") if route_viz else None,
             
-            # Feature details
-            html.H5("Feature Details", className="mt-3 mb-2 fs-6"),
+            # Feature details - FIXED to show both long and short features
+            html.H5("Trail Features", className="mt-3 mb-2 fs-6"),
             html.Div(
-                _create_feature_details(feature_stats, format_distance) if feature_stats else 
-                html.P("No trail features detected", className="text-muted"),
+                _create_feature_details(feature_stats, short_feature_stats, total_length),
                 className="small"
             )
         ], className="py-2")
     ])
 
-def create_segment_visualization(profile : Profile):
-    """Create keyboard-style visualization with external tooltips"""
-    fig = go.Figure()
-    
-    segments = profile.segments
-    profile_points = profile.points
-    
-    for i, seg in enumerate(segments):
-        color = get_segment_color(seg)
-        arrow_size = get_arrow_size(seg, profile_points)
-        direction = get_gradient_direction(seg, profile_points)
-                        
-        # Main segment bar with ID for tooltip targeting
-        fig.add_trace(go.Bar(
-            x=[i],
-            y=[1],
-            width=[0.9],
-            marker=dict(
-                color=color if color else 'white',
-                line=dict(width=1, color='#333')
-            ),
-            hoverinfo='skip',
-            showlegend=False,
-            customdata=[i]  # Store segment index
-        ))
-        
-        # Direction arrow annotation
-        fig.add_annotation(
-            x=i,
-            y=0.5,
-            text=direction,
-            showarrow=False,
-            font=dict(
-                size=arrow_size,
-                color='#333' if color == 'white' else 'black'
-            ),
-            yanchor='middle'
-        )
-        
-        # Short features indicators (colored circles below the bar)
-        if seg.short_features:
-            num_features = len(seg.short_features)
-            spacing = 0.8 / max(num_features, 1)
-            
-            for j, feature in enumerate(seg.short_features):
-                feature_color = get_feature_color(feature)
-                fig.add_annotation(
-                    x=i - 0.4 + (j + 0.5) * spacing,
-                    y=-0.2,
-                    text="•",
-                    showarrow=False,
-                    font=dict(
-                        size=14,
-                        color=feature_color if feature_color else 'red'
-                    ),
-                    yanchor='middle'
-                )
-    
-    fig.update_layout(
-        margin={'l': 0, 'r': 0, 't': 0, 'b': 20},
-        height=60,
-        xaxis={'visible': False, 'range': [-0.5, len(segments)-0.5]},
-        yaxis={'visible': False, 'range': [-0.5, 1]},
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        bargap=0.1
-    )
-    
-    # Create the graph component
-    graph = dcc.Graph(
-        id='route-profile-graph',
-        figure=fig,
-        config={'staticPlot': True},
-        style={
-            'height': '60px',
-            'width': '100%',
-            'cursor': 'pointer'
-        }
-    )
-    
-    # Create invisible divs for each segment that will trigger tooltips
-    trigger_divs = [
-        html.Div(
-            id=f'segment-{i}',
-            style={
-                'position': 'absolute',
-                'left': f'{i*(100/len(segments))}%',
-                'width': f'{90/len(segments)}%',
-                'height': '60px',
-                'zIndex': '100',
-                'pointerEvents': 'auto'
-            }
-        ) for i in range(len(segments))
-    ]    
-    
-    # Wrap everything in a container with relative positioning
-    return html.Div(
-        [
-            html.Div(
-                trigger_divs + [graph],
-                style={'position': 'relative'}
-            )
-        ],
-        style={'position': 'relative'}
-    )
-
-def _create_feature_details(feature_stats: dict, format_distance):
-    """Create detailed feature statistics with formatted distances"""
-    if not feature_stats:
+def _create_feature_details(feature_stats: dict, short_feature_stats: dict, total_route_length: float):
+    """Create detailed feature statistics showing long features as percentage of route"""
+    if not feature_stats and not short_feature_stats:
         return html.P("No trail features detected", className="text-muted")
     
     items = []
+    
+    # Process long features - show as percentage of total route
     for name, stats in sorted(feature_stats.items(), 
                              key=lambda x: (-x[1]['total_length'], x[0])):
-        # Main feature stats
+        percentage = (stats['total_length'] / total_route_length) * 100
         feature_item = [
             html.Span("■", style={
                 "color": stats['color'],
@@ -420,8 +334,24 @@ def _create_feature_details(feature_stats: dict, format_distance):
             }),
             html.Span(f" {name}: ", className="ms-1 fw-bold"),
             html.Span(f"{stats['count']} segments", className="me-2"),
-            html.Span(f"{format_distance(stats['total_length'])} total", className="me-2"),
-            html.Span(f"avg {stats['avg_gradient']:.1f}%", className="me-2"),
+            html.Span(f"({percentage:.1f}% of route)", className="text-muted me-2"),
+            html.Br(),
+            html.Span(stats['description'], className="text-muted font-italic")
+        ]
+        
+        items.append(html.Li(feature_item, className="mb-3"))
+    
+    # Process short features - only show count, no length
+    for name, stats in sorted(short_feature_stats.items(), 
+                             key=lambda x: (-x[1]['count'], x[0])):
+        feature_item = [
+            html.Span("▪", style={
+                "color": stats['color'],
+                "fontSize": "1.2em",
+                "verticalAlign": "middle"
+            }),
+            html.Span(f" {name}: ", className="ms-1 fw-bold"),
+            html.Span(f"{stats['count']} features", className="me-2"),
             html.Br(),
             html.Span(stats['description'], className="text-muted font-italic")
         ]
@@ -429,6 +359,183 @@ def _create_feature_details(feature_stats: dict, format_distance):
         items.append(html.Li(feature_item, className="mb-3"))
     
     return html.Ul(items, className="list-unstyled")
+
+def create_segment_visualization(profile : Profile):
+    """Create visually appealing horizontal table that shows full height without scrolling"""
+    segments = profile.segments
+    profile_points = profile.points
+    
+    # Colors that match the route card theme
+    header_bg = '#e9ecef'  # Light gray similar to card headers
+    border_color = '#dee2e6'  # Subtle border color
+    text_color = '#495057'  # Dark gray text
+    
+    # Create compact table header with segment numbers
+    header_cells = [html.Th("Segment", style={
+        'min-width': '60px', 
+        'font-size': '11px',
+        'background-color': header_bg,
+        'border': f'1px solid {border_color}',
+        'padding': '4px 6px',
+        'color': text_color,
+        'font-weight': '600'
+    })]
+    
+    for i in range(len(segments)):
+        header_cells.append(html.Th(f"{i+1}", style={
+            'min-width': '35px', 
+            'text-align': 'center',
+            'font-size': '11px',
+            'background-color': header_bg,
+            'border': f'1px solid {border_color}',
+            'padding': '4px 2px',
+            'color': text_color,
+            'font-weight': '600'
+        }))
+    
+    # Create compact gradient row with arrows
+    gradient_cells = [html.Td("Gradient", style={
+        'background-color': header_bg,
+        'font-weight': '600',
+        'font-size': '11px',
+        'border': f'1px solid {border_color}',
+        'padding': '6px 6px',
+        'color': text_color
+    })]
+    
+    for seg in segments:
+        arrow_size = max(14, min(18, get_arrow_size(seg, profile_points)))  # Constrained size
+        direction = get_gradient_direction(seg, profile_points)
+        gradient_cells.append(html.Td(
+            direction,
+            style={
+                'text-align': 'center',
+                'font-size': f'{arrow_size}px',
+                'padding': '4px 2px',
+                'height': '22px',
+                'border': f'1px solid {border_color}',
+                'background-color': 'rgba(248, 249, 250, 0.8)',
+                'vertical-align': 'middle'
+            }
+        ))
+    
+    # Create compact feature row with colored bars only
+    feature_cells = [html.Td("Feature", style={
+        'background-color': header_bg,
+        'font-weight': '600',
+        'font-size': '11px',
+        'border': f'1px solid {border_color}',
+        'padding': '6px 6px',
+        'color': text_color
+    })]
+    
+    for seg in segments:
+        if seg.feature or seg.short_features:
+            color = get_segment_color(seg)
+            feature_cells.append(html.Td(
+                style={
+                    'background-color': color,
+                    'height': '20px',
+                    'min-width': '35px',
+                    'border-radius': '3px',
+                    'padding': '0',
+                    'border': f'2px solid {color}',
+                    'box-shadow': '0 1px 2px rgba(0,0,0,0.1)',
+                    'vertical-align': 'middle'
+                },
+                title=get_segment_description(seg, profile_points)
+            ))
+        else:
+            feature_cells.append(html.Td(
+                style={
+                    'background-color': 'transparent',
+                    'height': '20px',
+                    'border': f'1px solid {border_color}',
+                    'vertical-align': 'middle'
+                }
+            ))
+    
+    # Create compact short features row with icons
+    short_feature_cells = [html.Td("Extra", style={
+        'background-color': header_bg,
+        'font-weight': '600',
+        'font-size': '11px',
+        'border': f'1px solid {border_color}',
+        'padding': '6px 6px',
+        'color': text_color
+    })]
+    
+    for seg in segments:
+        if seg.short_features:
+            icon_elements = []
+            for feature in seg.short_features:
+                feature_color = get_feature_color(feature)
+                icon = get_feature_icon(feature.feature_type)
+                icon_elements.append(html.Span(
+                    icon,
+                    style={
+                        'color': feature_color,
+                        'font-size': '14px',
+                        'margin': '0 1px',
+                        'font-weight': 'bold',
+                        'text-shadow': '0 1px 1px rgba(0,0,0,0.1)',
+                        'display': 'inline-block'
+                    },
+                    title=get_feature_name(feature.feature_type)
+                ))
+            short_feature_cells.append(html.Td(
+                icon_elements,
+                style={
+                    'text-align': 'center',
+                    'padding': '4px 2px',
+                    'height': '22px',
+                    'border': f'1px solid {border_color}',
+                    'background-color': 'rgba(248, 249, 250, 0.8)',
+                    'vertical-align': 'middle'
+                }
+            ))
+        else:
+            short_feature_cells.append(html.Td(
+                style={
+                    'background-color': 'transparent',
+                    'height': '22px',
+                    'border': f'1px solid {border_color}',
+                    'vertical-align': 'middle'
+                }
+            ))
+    
+    # Create the compact HTML table
+    table = html.Table(
+        [
+            html.Thead(html.Tr(header_cells)),
+            html.Tbody([
+                html.Tr(gradient_cells),
+                html.Tr(feature_cells),
+                html.Tr(short_feature_cells)
+            ])
+        ],
+        style={
+            'border-collapse': 'collapse',
+            'width': '100%',
+            'font-size': '11px',
+            'border': f'1px solid {border_color}',
+            'border-radius': '6px',
+            'overflow': 'hidden',
+            'box-shadow': '0 1px 3px rgba(0,0,0,0.05)',
+            'background-color': 'white',
+            'font-family': '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+        }
+    )
+    
+    return html.Div(
+        table,
+        style={
+            'overflowX': 'auto',
+            'height': 'auto',  # Allow natural height
+            'maxHeight': 'none',  # Remove max height constraint
+            'margin-bottom': '12px'
+        }
+    )
 
 def create_checkpoint_card(checkpoint, route: ProcessedRoute):
     """

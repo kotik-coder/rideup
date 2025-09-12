@@ -154,7 +154,7 @@ class ProfileSegment:
                     else spot_system.min_segment_length)
         
         if self.length(profile_points) < min_length:
-            return False
+            return False        
                 
         # Validate short features
         for sf in self.short_features:
@@ -166,10 +166,10 @@ class ProfileSegment:
             return False
                 
         return True
-
+ 
     def oscillation_clusters(self, profile_points: List[ProfilePoint], system: RatingSystem) -> Optional[List[List[int]]]:
         """Check if segment qualifies for roller analysis with feature length constraints"""
-        allowed_features = [tft.ROLLER, tft.FLOW_DESCENT]
+        allowed_features = [tft.ROLLERCOASTER, tft.FLOW_DESCENT]
         intersection = [feature for feature in allowed_features if feature in system.get_compatible_features(self.gradient_type)]
         
         if len(intersection) == 0:
@@ -304,12 +304,21 @@ class Feature:
     def length(self, segment : ProfileSegment, points : List[ProfilePoint]):
         return segment.length(points, self.seg_start_index, self.seg_end_index)    
         
-    def calc_grade(self, profile_points : List[ProfilePoint], start : int, end : int):
-        return np.mean([p.baseline_gradient for p in profile_points[start:end] ] )
+    def calc_grade(self, profile_points : List[ProfilePoint], segment : ProfileSegment, local_feature : bool = False):
+        start = segment.start_abs_idx + self.seg_start_index
+        end   = segment.start_abs_idx + self.seg_end_index
+        
+        if not local_feature:
+            result = np.mean([p.baseline_gradient for p in profile_points[start:end] ] )
+        else:
+            result = np.max([p.gradient for p in profile_points[start:end] ] )
+        
+        return result
     
     def validate(self, segment : ProfileSegment, 
                        points : List[ProfilePoint],
-                       rating_system: RatingSystem) -> bool:                            
+                       rating_system: RatingSystem,
+                       local_feature : bool = False) -> bool:                            
         config = self.feature_type.get_config(rating_system)        
         self.len = self.length(segment, points)
         
@@ -321,19 +330,19 @@ class Feature:
         
         # Gradient validation
         min_grad, max_grad = config['gradient_range']
-        self.grade     = self.calc_grade(points, 
-                                         segment.start_abs_idx + self.seg_start_index, 
-                                         segment.start_abs_idx + self.seg_end_index)
+        
+        self.grade     = self.calc_grade(points, segment, local_feature)
+        
         valid_gradient = (min_grad <= self.grade <= max_grad)
         
         if not valid_gradient:
-            return False
+            return False                
         
-        # Compatibility check        
-        valid_config = self.feature_type.is_compatible_with(segment.gradient_type, rating_system)
+        # Compatibility check                
+        valid_config = rating_system.is_feature_compatible(self.feature_type, segment.gradient_type)
         
         if not valid_config:
-            return False
+            return False        
         
         valid_short_features = True
         
@@ -360,7 +369,30 @@ class Profile:
     def __init__(self, spot_system: RatingSystem, proute: ProcessedRoute):
         self.spot_system = spot_system
         self.points      = self._create_profile_points(proute)
-        self.segments    = self._build_segments(proute.baseline)
+        
+        raw_segments     = self._identify_baseline_segments()
+        processed_segments = self._build_segments(raw_segments, proute.baseline)
+                           
+        # Merge transitional segments with no features        
+        prev_count    = 1        
+        merged_result = []
+        new_feature_segments = 1
+        old_feature_segments = 0                
+        
+        while len(processed_segments) < prev_count or new_feature_segments > old_feature_segments:
+            prev_count         = len(processed_segments)                        
+            
+            merged_result      = self._merge_transitional_segments(processed_segments, proute.baseline)            
+            old_feature_segments = len([c.feature for c in merged_result if c.feature])            
+            
+            candidate_segments = self._build_segments(merged_result, proute.baseline)                        
+            new_feature_segments = len([c.feature for c in candidate_segments if c.feature])                        
+            
+            processed_segments = candidate_segments \
+                                    if new_feature_segments > old_feature_segments \
+                                    else merged_result            
+            
+        self.segments = processed_segments
            
     def _create_profile_points(self, proute: ProcessedRoute) -> List[ProfilePoint]:
         """Generate profile points from processed route"""
@@ -388,7 +420,7 @@ class Profile:
         
         ftr_start, ftr_end = feature.get_absolute_indices(seg.start_abs_idx)
         
-        test_segment  = ProfileSegment(ftr_start, ftr_end, seg.gradient_type)
+        test_segment = ProfileSegment(ftr_start, ftr_end, seg.gradient_type)
         test_segment._reclassify_segment(p)
         
         identified_feature = p._identify_feature(bl, test_segment)
@@ -422,7 +454,7 @@ class Profile:
                        baseline : Baseline, 
                        start : int, 
                        end : int, 
-                       type : gst):
+                       type : gst):        
         segment = ProfileSegment(
                 start_idx=start,
                 end_idx=end,
@@ -449,7 +481,7 @@ class Profile:
             return segment, None
         
         # Ensure split index is within valid bounds
-        split_index = min(max(split_index, 1), segment_length - 1)
+        split_index = min(max(split_index, 0), segment_length - 1)
         
         left_segment = self.create_segment(
             baseline,
@@ -476,24 +508,29 @@ class Profile:
         Split a segment based on start and end cut indices (single responsibility: range-based split).
         Returns 1-3 segments depending on cut positions.
         """
+        
+        if cut_end > (segment.end_abs_idx - segment.start_abs_idx - 1):
+            return [segment]
+        
         segments = []
         
         # Segment before the cut range
-        if cut_start > 0:
-            before_segment, _ = self._split_segment_at_index(segment, baseline, cut_start)
-            segments.append(before_segment)
+        before_first_cut, after_first_cut = self._split_segment_at_index(segment, baseline, cut_start)
+        segments.append(before_first_cut)
         
-        # The cut segment itself
-        cut_length = cut_end - cut_start + 1
-        cut_segment, after_segment = self._split_segment_at_index(
-            segment, baseline, cut_start + cut_length
-        )
-        segments.append(cut_segment)
-        
-        # Segment after the cut range
-        if after_segment:
-            segments.append(after_segment)
-        
+        # The cut segment itself    
+        if after_first_cut:
+            cut_segment, after_second_cut = self._split_segment_at_index(
+                after_first_cut, baseline, cut_end - cut_start
+            )        
+            
+            if cut_segment:            
+                segments.append(cut_segment)
+            
+            # Segment after the cut range
+            if after_second_cut:
+                segments.append(after_second_cut)                                    
+                    
         return segments
 
     def _split_segment_by_clusters(self, 
@@ -542,30 +579,9 @@ class Profile:
             segments.append(current_segment)
         
         return segments
-
-    def _split_segment(self, 
-                    original_segment: ProfileSegment, 
-                    baseline: Baseline,
-                    cut_start: Optional[int] = None, 
-                    cut_end: Optional[int] = None,
-                    clusters: Optional[List[List[int]]] = None) -> List[ProfileSegment]:
-        """
-        Unified segment splitting method (single responsibility: routing to appropriate splitter).
-        Maintains backward compatibility while supporting new cluster-based splitting.
-        """
-        if clusters is not None:
-            # Route to cluster-based splitting
-            return self._split_segment_by_clusters(original_segment, baseline, clusters)
-        elif cut_start is not None and cut_end is not None:
-            # Route to range-based splitting (original functionality)
-            return self._split_segment_by_indices(original_segment, baseline, cut_start, cut_end)
-        else:
-            # No split needed
-            return [original_segment]    
             
-    def _build_segments(self, baseline: Baseline) -> List[ProfileSegment]:
-        """Construct and classify all segments"""
-        raw_segments = self._identify_baseline_segments()
+    def _build_segments(self, raw_segments : List[ProfileSegment], baseline: Baseline) -> List[ProfileSegment]:
+        """Construct and classify all segments"""        
         processed_segments = []                
         
         for seg in raw_segments:
@@ -574,88 +590,81 @@ class Profile:
             
             if clusters:
                 # Use the unified split method with clusters parameter
-                cluster_split_segments = self._split_segment(seg, clusters=clusters, baseline=baseline)
+                cluster_split_segments = self._split_segment_by_clusters(seg, clusters=clusters, baseline=baseline)                
                 
                 # Process each resulting segment
                 for split_seg in cluster_split_segments:
-                    self._process_individual_segment(split_seg, baseline, processed_segments, clusters, seg)
-            else:
-                # Original logic using cut_start/cut_end parameters
-                self._process_individual_segment(seg, baseline, processed_segments, None, seg)
+                    self._process_individual_segment(split_seg, baseline, processed_segments)
                     
-        # Merge transitional segments with no features        
-        prev_count    = 1
-        merged_result = []
-        
-        while len(merged_result) < prev_count:                    
-            prev_count         = len(processed_segments)            
-            merged_result      = self._merge_transitional_segments(processed_segments, baseline)            
-            processed_segments = merged_result
-            
-        return merged_result
+            else:
+                self._process_individual_segment(seg, baseline, processed_segments)                                                
+                
+        return processed_segments
 
     def _merge_transitional_segments(self, segments: List[ProfileSegment], baseline: Baseline) -> List[ProfileSegment]:            
         merged = []
         none_feature_indices = [i for i, seg in enumerate(segments) if seg.feature is None]
         i = 0
-        last_id = len(segments) - 2
-        
-        while i < last_id + 1:
-            
-            original_i = segments[i]
-            original_j = segments[i + 1]
+        n = len(segments)
+                        
+        while i < n - 1:
+                
+            current_segment = segments[i]
+            next_segment    = segments[i + 1]
             
             are_features_absent   = i in none_feature_indices and (i + 1) in none_feature_indices
-            is_segment_dissimilar = not original_i.gradient_type.is_transitional_to(original_j.gradient_type) and \
-                                        original_i.gradient_type != original_j.gradient_type
+            is_segment_dissimilar = not current_segment.gradient_type.is_transitional_to(next_segment.gradient_type) and \
+                                    current_segment.gradient_type != next_segment.gradient_type
             
-            #feature segment
             if not are_features_absent or is_segment_dissimilar:
-                merged.append(original_i)
-                #last one
-                if i == last_id:
-                    merged.append(original_j)
+                merged.append(current_segment)
                 i += 1
-                
             else:
-                            
-                merged_start = original_i.start_abs_idx
-                merged_end   = original_j.end_abs_idx            
-            
+                # Merge the two segments
+                merged_start = current_segment.start_abs_idx
+                merged_end = next_segment.end_abs_idx
+                
                 bigger_segment = self.create_segment(
-                    baseline, merged_start, merged_end, original_i.gradient_type
+                    baseline, merged_start, merged_end, current_segment.gradient_type
                 )
                 
                 merged.append(bigger_segment)
-                i += 2
+                i += 2  # Skip the next segment since we merged it
+                
+        if i < n:  # Only append if we haven't processed the last segment
+            merged.append(segments[n - 1])
         
         return merged
 
-    def _process_individual_segment(self, segment, baseline, processed_segments, clusters, original_segment):
+    def _process_individual_segment(self, segment, baseline, processed_segments):
         """Process a single segment with appropriate feature identification"""
-        is_cluster_segment = clusters and any(
-            self._is_segment_in_cluster(segment, original_segment, cluster)
-            for cluster in clusters
-        )
         
-        if is_cluster_segment:
-            # Special handling for cluster segments
-            feature = self._attempt_classify_roller(baseline, segment)
-        else:
-            # Regular feature identification
-            feature = self._identify_feature(baseline, segment)
+        # Regular feature identification
+        feature = self._identify_feature(baseline, segment)
+        
+        def overlapping_segments(s, segments) -> bool:
+            for p in segments:
+                if (s.start_abs_idx >= p.start_abs_idx) and \
+                   (s.end_abs_idx <= p.end_abs_idx):                   
+                        return True
+                
+            return False
         
         if feature:
+            segment.feature = feature
+            
             start, end = feature.find_tightest_boundaries(
                 self, segment, baseline, Profile.is_feature_conserved
             )
-            # Use unified split method with cut indices
-            feature_split_segments = self._split_segment(
+            #Use unified split method with cut indices
+            feature_split_segments = self._split_segment_by_indices(
                 segment, cut_start=start, cut_end=end, baseline=baseline
-            )
+            )               
+            
             processed_segments.extend(feature_split_segments)
         else:
-            processed_segments.append(segment)
+            if not overlapping_segments(segment, processed_segments):
+                processed_segments.append(segment)                        
 
     def _is_segment_in_cluster(self, segment: ProfileSegment, 
                             original_segment: ProfileSegment, 
@@ -798,7 +807,7 @@ class Profile:
             return None
         
         compatible_features = self.spot_system.get_compatible_features(segment.gradient_type)        
-        allowed_features    = [tft.FLOW_DESCENT, tft.ROLLER]
+        allowed_features    = [tft.FLOW_DESCENT, tft.ROLLERCOASTER]
         candidates = [ feature for feature in allowed_features if feature in compatible_features ]
         
         for w in sorted(wavelengths):
@@ -855,10 +864,9 @@ class Profile:
                     seg_start_index=start_idx,
                     seg_end_index  =end_idx,
                     len   = segment.length(self.points, start_idx, end_idx),
-                    grade = np.mean(feature_gradients)
+                    grade = np.max(feature_gradients)
                 ) for cf in compatible_features ]
             
             for candidate in candidate_features:
-                if candidate.validate(segment, self.points, self.spot_system):                
-                    segment.short_features.append(candidate)          
-                    break
+                if candidate.validate(segment, self.points, self.spot_system, local_feature=True):
+                    segment.short_features.append(candidate)

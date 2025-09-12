@@ -29,7 +29,7 @@ class RatingSystem:
     # Feature parameters
     feature_parameters: Dict['TrailFeatureType', Dict[str, Any]] = field(
         default_factory=lambda: {
-            TrailFeatureType.ROLLER: {
+            TrailFeatureType.ROLLERCOASTER: {
                 "min_length": 50,
                 "max_length": 250,
                 "gradient_range": (-0.05, 0.05),
@@ -65,15 +65,15 @@ class RatingSystem:
                 "difficulty_impact": 2.5
             },
             TrailFeatureType.KICKER: {
-                "min_length": 1,
-                "max_length": 10,
-                "gradient_range": (-0.3, -0.15),
+                "min_length": 0.1,
+                "max_length": 15,
+                "gradient_range": (0.1, float('inf')),
                 "difficulty_impact": 2.5
             },
             TrailFeatureType.DROP: {
-                "min_length": 1,
+                "min_length": 0.1,
                 "max_length": 8,
-                "gradient_range": (-float('inf'), -0.25),
+                "gradient_range": (-float('inf'), -0.3),
                 "difficulty_impact": 3.5
             }
         }
@@ -82,11 +82,11 @@ class RatingSystem:
     # Feature compatibility with gradient types
     feature_compatibility: Dict['GradientSegmentType', List['TrailFeatureType']] = field(
         default_factory=lambda: {
-            GradientSegmentType.ASCENT: [TrailFeatureType.TECHNICAL_ASCENT],
-            GradientSegmentType.DESCENT: [TrailFeatureType.TECHNICAL_DESCENT, TrailFeatureType.FLOW_DESCENT, TrailFeatureType.SWITCHBACK],
-            GradientSegmentType.STEEP_ASCENT: [TrailFeatureType.TECHNICAL_ASCENT],
+            GradientSegmentType.ASCENT: [TrailFeatureType.TECHNICAL_ASCENT, TrailFeatureType.DROP],
+            GradientSegmentType.DESCENT: [TrailFeatureType.TECHNICAL_DESCENT, TrailFeatureType.FLOW_DESCENT, TrailFeatureType.SWITCHBACK, TrailFeatureType.KICKER, TrailFeatureType.DROP],
+            GradientSegmentType.STEEP_ASCENT: [TrailFeatureType.TECHNICAL_ASCENT, TrailFeatureType.DROP],
             GradientSegmentType.STEEP_DESCENT: [TrailFeatureType.TECHNICAL_DESCENT, TrailFeatureType.DROP, TrailFeatureType.KICKER],
-            GradientSegmentType.FLAT: []
+            GradientSegmentType.FLAT: [TrailFeatureType.ROLLERCOASTER, TrailFeatureType.KICKER, TrailFeatureType.DROP]
         }
     )
 
@@ -190,7 +190,7 @@ class GradientSegmentType(Enum):
 
 class TrailFeatureType(Enum):
     """Enhanced trail feature classification with physical properties"""
-    ROLLER = auto()
+    ROLLERCOASTER = auto()
     SWITCHBACK = auto()
     TECHNICAL_DESCENT = auto()
     TECHNICAL_ASCENT = auto()
@@ -209,19 +209,6 @@ class TrailFeatureType(Enum):
         config.setdefault('max_length', 100)
         config.setdefault('gradient_range', (-float('inf'), float('inf')))
         return config
-
-    def is_compatible_with(self, gradient_type: GradientSegmentType, rating_system: RatingSystem) -> bool:
-        """Check compatibility with additional physical constraints"""
-        if not rating_system.is_feature_compatible(self, gradient_type):
-            return False
-            
-        # Additional physical constraints
-        if self == self.SWITCHBACK and gradient_type != GradientSegmentType.STEEP_DESCENT:
-            return False
-        if self == self.KICKER and gradient_type != GradientSegmentType.STEEP_ASCENT:
-            return False
-            
-        return True
 
     def validate_segment_length(self, length: float, rating_system: RatingSystem) -> bool:
         """Validate if length is appropriate for this feature"""

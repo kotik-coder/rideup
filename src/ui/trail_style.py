@@ -1,7 +1,7 @@
 # trail_style.py
 from typing import Union, List, Dict
 from src.routes.profile_analyzer import Feature, ProfileSegment, ProfilePoint
-from src.routes.rating_system import GradientSegmentType, TrailFeatureType
+from src.routes.rating_system import GradientSegmentType, TrailFeatureType, RatingSystem
 
 # Enhanced color configuration with new feature types and technical score visualization
 COLOR_MAP = {
@@ -21,9 +21,17 @@ COLOR_MAP = {
     TrailFeatureType.DROP: "rgba(50, 120, 255, 1.0)",
     
     # Special Features
-    TrailFeatureType.ROLLER: "rgba(255, 195, 0, 0.95)",
+    TrailFeatureType.ROLLERCOASTER: "rgba(255, 195, 0, 0.95)",
     TrailFeatureType.FLOW_DESCENT: "rgba(100, 220, 100, 0.95)",
     TrailFeatureType.SWITCHBACK: "rgba(255, 165, 0, 0.95)",
+}
+
+# Simplified arrow configuration - all slim arrows with varying length/width
+ARROW_CONFIG = {
+    'base_size': 14,  # Base font size for arrows
+    'size_multiplier': 0.8,  # Multiplier for gradient-based sizing
+    'min_size': 10,
+    'max_size': 20
 }
 
 # Enhanced width configuration with technical score consideration
@@ -33,17 +41,17 @@ WIDTH_CONFIG = {
     'highlight': {
         'default': 6,
         # Technical/Dangerous
-        'TECHNICAL_ASCENT': 8,
-        'TECHNICAL_DESCENT': 8,
-        'DROP': 8,
-        'KICKER': 8,
+        TrailFeatureType.TECHNICAL_ASCENT: 8,
+        TrailFeatureType.TECHNICAL_DESCENT: 8,
+        TrailFeatureType.DROP: 8,
+        TrailFeatureType.KICKER: 8,
         # Steep/Challenging
-        'STEEP_ASCENT': 7,
-        'STEEP_DESCENT': 7,
+        GradientSegmentType.STEEP_ASCENT: 7,
+        GradientSegmentType.STEEP_DESCENT: 7,
         # Special Features
-        'SWITCHBACK': 7,
-        'ROLLER': 6.5,
-        'FLOW_DESCENT': 6
+        TrailFeatureType.SWITCHBACK: 7,
+        TrailFeatureType.ROLLERCOASTER: 6.5,
+        TrailFeatureType.FLOW_DESCENT: 6
     }
 }
 
@@ -59,44 +67,46 @@ TECHNICAL_SCORE_COLORS = [
 def get_feature_name(feature_type: Union[TrailFeatureType, GradientSegmentType]) -> str:
     """Get display name for a feature with special cases"""
     name_map = {
-        'KICKER': 'Step Up',
-        'DROP': 'Step Down',
-        'FLOW_DESCENT': 'Flow Section'
+        TrailFeatureType.KICKER: 'Step Up',
+        TrailFeatureType.DROP: 'Step Down',
+        TrailFeatureType.FLOW_DESCENT: 'Flow Section'
     }
     base_name = feature_type.name.replace('_', ' ')
-    return name_map.get(feature_type.name, base_name).title()
+    return name_map.get(feature_type, base_name).title()
 
 def get_feature_description(feature_type: TrailFeatureType) -> str:
     """Get enhanced description for a feature including technical aspects"""
     DESCRIPTIONS = {
-        'Roller': "Repeated undulations (10-50m wavelength) creating rhythmic challenges",
-        'Switchback': "Sharp 180° turns requiring precise weight shifting and braking",
-        'Technical Descent': "Challenging downhill with obstacles requiring line choice and control",
-        'Technical Ascent': "Demanding uphill requiring power management and technical skill",
-        'Flow Descent': "Smooth, rhythmic downhill section allowing for speed and fluid motion",
-        'Step Up': "Short, steep climb requiring explosive power (kicker)",
-        'Step Down': "Sudden steep descent requiring controlled weight shift (drop)",
+        TrailFeatureType.ROLLERCOASTER: "Repeated undulations (10-50m wavelength) creating rhythmic challenges",
+        TrailFeatureType.SWITCHBACK: "Sharp 180° turns requiring precise weight shifting and braking",
+        TrailFeatureType.TECHNICAL_DESCENT: "Challenging downhill with obstacles requiring line choice and control",
+        TrailFeatureType.TECHNICAL_ASCENT: "Demanding uphill requiring power management and technical skill",
+        TrailFeatureType.FLOW_DESCENT: "Smooth, rhythmic downhill section allowing for speed and fluid motion",
+        TrailFeatureType.KICKER: "Short, steep climb requiring explosive power (kicker)",
+        TrailFeatureType.DROP: "Sudden steep descent requiring controlled weight shift (drop)",
     }
-    return DESCRIPTIONS.get(get_feature_name(feature_type), "Trail feature")
+    return DESCRIPTIONS.get(feature_type, "Trail feature")
 
 def get_feature_color(feature: Feature, technical_score: float = None) -> str:
     """Get color based on segment features with optional technical score overlay"""
     base_color = COLOR_MAP.get(feature.feature_type)
     return _blend_with_technical(base_color, technical_score)
 
-def get_segment_color(segment : ProfileSegment, technical_score: float = None) -> str:
+def get_segment_color(segment: ProfileSegment, technical_score: float = None) -> str:
+    """Get color for a segment, considering its feature and gradient type"""
     if segment.feature:        
         return get_feature_color(segment.feature, technical_score)
     else:
         base_color = COLOR_MAP.get(segment.gradient_type)
         return _blend_with_technical(base_color, technical_score)
     
-def _blend_with_technical(base_color, technical_score):
-    if technical_score is not None:
+def _blend_with_technical(base_color: str, technical_score: float) -> str:
+    """Blend base color with technical score color"""
+    if technical_score is not None and base_color:
         # Blend with technical score color
         score_color = get_technical_score_color(technical_score)
         return blend_colors(base_color, score_color, 0.3)
-    return base_color
+    return base_color or "rgba(150, 150, 150, 0.5)"  # Default gray
 
 def get_technical_score_color(score: float) -> str:
     """Get color representing technical difficulty score"""
@@ -123,6 +133,19 @@ def blend_colors(color1: str, color2: str, ratio: float) -> str:
     
     return f"rgba({int(r)}, {int(g)}, {int(b)}, {round(a, 2)})"
 
+def get_feature_icon(feature_type: TrailFeatureType) -> str:
+    """Get appropriate icon for different feature types with better visual appeal"""
+    icon_map = {
+        TrailFeatureType.KICKER: "⤴",      # Step Up (curved arrow up)
+        TrailFeatureType.DROP: "⤵",        # Step Down (curved arrow down)
+        TrailFeatureType.SWITCHBACK: "↺",  # Switchback (circular arrow)
+        TrailFeatureType.ROLLERCOASTER: "≈", # Roller (approx symbol)
+        TrailFeatureType.FLOW_DESCENT: "⇢", # Flow (dashed arrow)
+        TrailFeatureType.TECHNICAL_ASCENT: "⤒", # Technical ascent (double arrow up)
+        TrailFeatureType.TECHNICAL_DESCENT: "⤓", # Technical descent (double arrow down)
+    }
+    return icon_map.get(feature_type, "•")  # Default to dot for other features
+
 def get_segment_name(segment: ProfileSegment) -> str:
     """Get display name for segment considering short features"""    
     if segment.feature:
@@ -142,30 +165,17 @@ def get_segment_name(segment: ProfileSegment) -> str:
     
     return segment.gradient_type.name.replace('_', ' ').title()
 
-def get_arrow_size(segment: ProfileSegment, profile_points: List[ProfilePoint], technical_score: float = None) -> int:
-    """Smart arrow sizing based on segment characteristics and technical score"""
-    base_size = 24
+def get_arrow_size(segment: ProfileSegment, profile_points: List[ProfilePoint]) -> int:
+    """Simplified arrow sizing - all slim arrows with gradient-based length"""
     gradient = abs(segment.grade(profile_points))
     
-    # Feature-based sizing
-    if segment.feature:
-        ftype = segment.feature.feature_type
-        if ftype in [TrailFeatureType.TECHNICAL_ASCENT, TrailFeatureType.TECHNICAL_DESCENT]:
-            base_size = 36
-        elif ftype in [TrailFeatureType.KICKER, TrailFeatureType.DROP]:
-            base_size = 28
-        elif ftype == TrailFeatureType.SWITCHBACK:
-            base_size = 32
+    # Base size with gradient multiplier
+    size = ARROW_CONFIG['base_size'] + (gradient * ARROW_CONFIG['size_multiplier'] * 10)
     
-    # Gradient-based sizing
-    if gradient > 0.15:
-        base_size = max(base_size, 30)
+    # Apply min/max constraints
+    size = max(ARROW_CONFIG['min_size'], min(ARROW_CONFIG['max_size'], size))
     
-    # Technical score modifier
-    if technical_score is not None:
-        base_size += min(12, technical_score * 1.5)
-    
-    return base_size
+    return int(size)
 
 def get_segment_description(segment: ProfileSegment, profile_points: List[ProfilePoint], technical_score: float = None) -> str:
     """Get comprehensive segment description with technical details"""
@@ -204,14 +214,35 @@ def get_segment_description(segment: ProfileSegment, profile_points: List[Profil
     return "\n".join(description_parts)
 
 def get_gradient_direction(segment: ProfileSegment, profile_points: List[ProfilePoint]) -> str:
-    """Enhanced arrow direction based on gradient"""
+    """Slim arrows with different characters for different gradient magnitudes"""
     gradient = segment.grade(profile_points)
+    abs_gradient = abs(gradient)
     
-    if gradient > 0.10: return '⤊'  # Steep ascent
-    if gradient > 0.05: return '↑'  # Ascent
-    if gradient < -0.10: return '⤋'  # Steep descent
-    if gradient < -0.05: return '↓'  # Descent
-    return '·'  # Flat
+    # Flat segments
+    if abs_gradient <= 0.01:
+        return '—'  # Horizontal line for flat
+    
+    # Ascent segments
+    if gradient > 0.01:
+        if abs_gradient > 0.15:  # Very steep ascent
+            return '⤊'  # Upwards arrow with tip
+        elif abs_gradient > 0.10:  # Steep ascent
+            return '↑'   # Up arrow
+        elif abs_gradient > 0.05:  # Moderate ascent
+            return '↗'   # Northeast arrow
+        else:  # Gentle ascent
+            return '↗'   # Northeast arrow (gentle)
+    
+    # Descent segments
+    else:
+        if abs_gradient > 0.15:  # Very steep descent
+            return '⤋'  # Downwards arrow with tip
+        elif abs_gradient > 0.10:  # Steep descent
+            return '↓'   # Down arrow
+        elif abs_gradient > 0.05:  # Moderate descent
+            return '↘'   # Southeast arrow
+        else:  # Gentle descent
+            return '↘'   # Southeast arrow (gentle)
 
 def get_short_feature_markers(segment: ProfileSegment, points: List[ProfilePoint]) -> List[Dict]:
     """Generate visualization markers for short features in a segment"""
@@ -224,8 +255,8 @@ def get_short_feature_markers(segment: ProfileSegment, points: List[ProfilePoint
             'type': sf.feature_type.name,
             'positions': [(p.lat, p.lon) for p in feature_points],
             'color': COLOR_MAP.get(sf.feature_type),
-            'width': WIDTH_CONFIG['highlight'].get(sf.feature_type.name, WIDTH_CONFIG['highlight']['default']),
-            'description': f"{get_feature_name(sf.feature_type)}: {sf.length:.1f}m at {sf.max_gradient*100:.1f}%"
+            'width': WIDTH_CONFIG['highlight'].get(sf.feature_type, WIDTH_CONFIG['highlight']['default']),
+            'description': f"{get_feature_name(sf.feature_type)}: {sf.length:.1f}m at {sf.grade*100:.1f}%"
         })
     return markers
 
@@ -233,7 +264,7 @@ def get_segment_style(segment: ProfileSegment, points: List[ProfilePoint], techn
     """Get complete style configuration for a segment"""
     return {
         'name': get_segment_name(segment),
-        'color': get_feature_color(segment, technical_score),
+        'color': get_segment_color(segment, technical_score),
         'width': get_segment_width(segment),
         'arrow_size': get_arrow_size(segment, points, technical_score),
         'description': get_segment_description(segment, points, technical_score),
@@ -246,8 +277,6 @@ def get_segment_width(segment: ProfileSegment) -> float:
     base_width = WIDTH_CONFIG['base']
     
     if segment.feature:
-        feature_name = segment.feature.feature_type.name
-        return WIDTH_CONFIG['highlight'].get(feature_name, WIDTH_CONFIG['highlight']['default'])
+        return WIDTH_CONFIG['highlight'].get(segment.feature.feature_type, WIDTH_CONFIG['highlight']['default'])
     
-    gradient_type = segment.gradient_type.name
-    return WIDTH_CONFIG['highlight'].get(gradient_type, base_width)
+    return WIDTH_CONFIG['highlight'].get(segment.gradient_type, base_width)
