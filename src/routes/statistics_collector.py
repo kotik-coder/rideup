@@ -4,7 +4,7 @@ import numpy as np
 from src.routes.spot import Spot
 from src.routes.profile_analyzer import Profile, ProfileSegment
 from src.routes.route_processor import ProcessedRoute
-from src.routes.track import Track
+from src.routes.track import Track, TrackAnalysis
 from src.routes.rating_system import *
 from src.routes.terrain_and_weather import TerrainAnalysis, WeatherData
 
@@ -14,10 +14,12 @@ def generate_route_profiles(spot: Spot, proute: ProcessedRoute, associated_track
     
     # Calculate additional statistics
     difficulty = _determine_difficulty(profile, spot.system)    
+    velocity_profiles = _generate_velocity_profiles(proute, associated_tracks)
     
     return {
         'profile': profile,
         'difficulty': difficulty,
+        'dynamic': velocity_profiles
     }
 
 def _determine_difficulty(profile: Profile, spot_system: RatingSystem) -> str:
@@ -49,6 +51,119 @@ def _determine_difficulty(profile: Profile, spot_system: RatingSystem) -> str:
     # Final score is the weighted average
     final_score = total_weighted_score / total_weight if total_weight > 0 else 0
     
-    print(f"Final score is {final_score:.2f}")
-    
     return RouteDifficulty.from_score(final_score, spot_system).name
+
+def _generate_velocity_profiles(proute: ProcessedRoute, tracks: List[Track]) -> List[TrackAnalysis]:
+    """Generate velocity profiles from GPS tracks that match the route"""
+    velocity_profiles = []
+    
+    if not tracks or not proute.smooth_points:
+        return velocity_profiles
+    
+    total_route_distance = proute.total_distance()
+    if total_route_distance <= 0:
+        return velocity_profiles
+    
+    for track in tracks:
+        if not track.points or len(track.points) < 2:
+            continue
+            
+        # Only process tracks that are reasonably similar in length to the route
+        track_distance = sum(
+            track.points[i-1].point.distance_to(track.points[i].point)
+            for i in range(1, len(track.points)))
+        
+        if abs(track_distance - total_route_distance) / total_route_distance > 0.5:
+            continue
+        
+        # Use the track's built-in analysis if available
+        if hasattr(track, 'analysis') and track.analysis:
+            # Convert TrackAnalysis to be compatible with graph_generation
+            velocity_profiles.extend(track.analysis)
+        else:
+            # Fallback: create basic velocity analysis from track points
+            velocity_profiles.extend(_create_basic_velocity_analysis(track))
+    
+    return velocity_profiles
+
+def _create_basic_velocity_analysis(track: Track) -> List[TrackAnalysis]:
+    """Create basic velocity analysis from track points when no analysis exists"""
+    analysis_points = []
+    
+    if not track.points or len(track.points) < 2:
+        return analysis_points
+    
+    # Calculate cumulative distance
+    distances = [0.0]
+    for i in range(1, len(track.points)):
+        dist = track.points[i-1].point.distance_to(track.points[i].point)
+        distances.append(distances[-1] + dist)
+    
+    # Calculate velocities and accelerations
+    for i in range(len(track.points)):
+        if i == 0:
+            # First point - use forward difference
+            if len(track.points) > 1:
+                dt = (track.points[1].timestamp - track.points[0].timestamp).total_seconds()
+                if dt > 0:
+                    h_speed = distances[1] / dt
+                    v_speed = (track.points[1].point.elevation - track.points[0].point.elevation) / dt
+                else:
+                    h_speed = 0
+                    v_speed = 0
+            else:
+                h_speed = 0
+                v_speed = 0
+            h_accel = 0
+            v_accel = 0
+            
+        elif i == len(track.points) - 1:
+            # Last point - use backward difference
+            dt = (track.points[-1].timestamp - track.points[-2].timestamp).total_seconds()
+            if dt > 0:
+                h_speed = (distances[-1] - distances[-2]) / dt
+                v_speed = (track.points[-1].point.elevation - track.points[-2].point.elevation) / dt
+            else:
+                h_speed = 0
+                v_speed = 0
+            h_accel = 0
+            v_accel = 0
+            
+        else:
+            # Middle points - use central difference
+            dt_prev = (track.points[i].timestamp - track.points[i-1].timestamp).total_seconds()
+            dt_next = (track.points[i+1].timestamp - track.points[i].timestamp).total_seconds()
+            
+            if dt_prev > 0 and dt_next > 0:
+                h_speed_prev = (distances[i] - distances[i-1]) / dt_prev
+                h_speed_next = (distances[i+1] - distances[i]) / dt_next
+                h_speed = (h_speed_prev + h_speed_next) / 2
+                
+                v_speed_prev = (track.points[i].point.elevation - track.points[i-1].point.elevation) / dt_prev
+                v_speed_next = (track.points[i+1].point.elevation - track.points[i].point.elevation) / dt_next
+                v_speed = (v_speed_prev + v_speed_next) / 2
+                
+                # Simple acceleration calculation
+                h_accel = (h_speed_next - h_speed_prev) / ((dt_prev + dt_next) / 2)
+                v_accel = (v_speed_next - v_speed_prev) / ((dt_prev + dt_next) / 2)
+            else:
+                h_speed = 0
+                v_speed = 0
+                h_accel = 0
+                v_accel = 0
+        
+        # Apply physical limits
+        h_speed = min(h_speed, 47.2)  # MAX_PLAUSIBLE_SPEED
+        v_speed = max(min(v_speed, 10.0), -10.0)  # MAX_VERTICAL_SPEED
+        h_accel = max(min(h_accel, 10.0), -10.0)  # MAX_PLAUSIBLE_ACCEL
+        v_accel = max(min(v_accel, 10.0), -10.0)  # MAX_PLAUSIBLE_ACCEL
+        
+        analysis_points.append(TrackAnalysis(
+            horizontal_speed=h_speed,
+            vertical_speed=v_speed,
+            horizontal_accel=h_accel,
+            vertical_accel=v_accel,
+            distance_from_start=distances[i]
+        ))
+    
+    return analysis_points
