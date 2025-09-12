@@ -214,6 +214,42 @@ class ProfileSegment:
             clusters.append(current_cluster)
             
         return clusters
+    
+    def _calculate_segment_score(self, 
+                           points: List[ProfilePoint],
+                           spot_system: RatingSystem) -> float:
+        """
+        Calculate the difficulty score for a single segment
+        """
+        avg_grad = self.grade(points)
+        grad_percent = abs(avg_grad) * 100
+        
+        # Base score from gradient
+        if self.gradient_type == gst.STEEP_ASCENT:
+            base_score = min(grad_percent / 5, 5)  # 0-5 points
+        elif self.gradient_type == gst.STEEP_DESCENT:
+            base_score = min(grad_percent / 5, 5)  # 0-5 points
+        elif self.gradient_type == gst.ASCENT:
+            base_score = min(grad_percent / 10, 2)  # 0-2 points
+        elif self.gradient_type == gst.DESCENT:
+            base_score = min(grad_percent / 10, 2)  # 0-2 points
+        else:  # FLAT
+            base_score = 0
+        
+        # Add feature impact
+        feature_score = 0
+        if self.feature:
+            feature_config = self.feature.feature_type.get_config(spot_system)
+            feature_score = feature_config.get('difficulty_impact', 0)
+        
+        # Add short features impact
+        short_features_score = 0
+        for sf in self.short_features:
+            sf_config = sf.feature_type.get_config(spot_system)
+            short_features_score += sf_config.get('difficulty_impact', 0)
+        
+        # Total segment score
+        return base_score + feature_score + short_features_score
 
 @dataclass
 class Feature:
@@ -470,7 +506,7 @@ class Profile:
                             split_index: int
                             ) -> Tuple[Optional[ProfileSegment], Optional[ProfileSegment]]:
         """
-        Split a segment at a specific relative index (single responsibility: index-based split).
+        Split a segment at a specific relative in dex (single responsibility: index-based split).
         Returns (left_segment, right_segment) where either may be None.
         """
         if not segment or split_index <= 0:

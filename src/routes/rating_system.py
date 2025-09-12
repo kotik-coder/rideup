@@ -20,9 +20,9 @@ class RatingSystem:
     difficulty_thresholds: Dict[str, Tuple[float, float]] = field(
         default_factory=lambda: {
             "GREEN": (0, 2.0), 
-            "BLUE": (2.0, 7.0),
-            "BLACK": (7.0, 15.0),
-            "DOUBLE_BLACK": (15.0, float('inf'))
+            "BLUE": (2.0, 5.0),
+            "BLACK": (5.0, 8.0),
+            "DOUBLE_BLACK": (8.0, float('inf'))
         }
     )
 
