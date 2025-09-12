@@ -170,6 +170,7 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
             
         return no_update, no_update
 
+    # callbacks.py (updated section)
     @app.callback(
         Output('profile-graph', 'figure'),
         Output('bottom-panel-container', 'style', allow_duplicate=True),
@@ -204,7 +205,23 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
         if graph_type == 'elevation':
             fig = create_elevation_profile_figure(profiles['profile'], highlight_distance)
         else:
-            fig = create_velocity_profile_figure(profiles['dynamic'], highlight_distance)
+            # Handle the new velocity profile format
+            velocity_data = profiles['dynamic']
+            
+            # Check if we have both actual and theoretical data
+            actual_points = velocity_data.get('actual', [])
+            theoretical_points = None
+            
+            # For velocity graph, we can show either comparison or individual theoretical profile
+            # Let's show the INTERMEDIATE theoretical profile by default
+            if 'theoretical' in velocity_data and 'INTERMEDIATE' in velocity_data['theoretical']:
+                theoretical_points = velocity_data['theoretical']['INTERMEDIATE']['analysis_points']
+            
+            fig = create_velocity_profile_figure(
+                actual_profile_points=actual_points,
+                theoretical_profile_points=theoretical_points,
+                highlight_distance=highlight_distance
+            )
             
         current_style.update({
             'height': '25vh',  # Fixed height when visible

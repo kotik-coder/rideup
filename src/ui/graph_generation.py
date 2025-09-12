@@ -1,6 +1,6 @@
 import plotly.graph_objects as go
 import numpy as np
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from src.routes.baseline import Baseline
 from src.routes.profile_analyzer import Profile
 from src.routes.track import TrackAnalysis
@@ -64,7 +64,7 @@ def calculate_velocity_quartiles(velocities):
     return q1, median, q3
 
 def create_elevation_profile_figure(profile: Profile,
-                                  highlight_distance: Optional[float] = None) -> go.Figure:
+                                    highlight_distance: Optional[float] = None) -> go.Figure:
     """Create elevation profile with baseline, median reference, and gradient visualization."""
     fig = go.Figure()
     
@@ -227,20 +227,58 @@ def create_elevation_profile_figure(profile: Profile,
     )
     return fig
 
-def create_velocity_profile_figure(profile_points: List[TrackAnalysis],
+def create_velocity_profile_figure(actual_profile_points: List[TrackAnalysis],
+                                 theoretical_profile_points: Optional[List[TrackAnalysis]] = None,
                                  highlight_distance: Optional[float] = None) -> go.Figure:
-    """Create velocity profile visualization with quartile-based coloring."""
+    """Create velocity profile visualization with actual and theoretical data"""
     fig = go.Figure()
     
-    distances = [p.distance_from_start for p in profile_points]
-    velocities = [p.horizontal_speed * 3.6 for p in profile_points]  # Convert m/s to km/h
+    # Process actual velocity data
+    actual_distances = [p.distance_from_start for p in actual_profile_points]
+    actual_velocities = [p.horizontal_speed * 3.6 for p in actual_profile_points]  # Convert m/s to km/h
     
-    # Calculate velocity quartiles
-    q1, median, q3 = calculate_velocity_quartiles(velocities)
+    # Add actual velocity line
+    fig.add_trace(go.Scatter(
+        x=actual_distances,
+        y=actual_velocities,
+        mode='lines',
+        line=dict(
+            color='rgba(0, 180, 0, 1)',  # Green for actual data
+            width=3,
+            shape='spline',
+            smoothing=1.3
+        ),
+        name='Actual Velocity',
+        hoverinfo='y+name'
+    ))
     
-    # Get fill polygons for different velocity ranges
-    _, below_q1_polygons = get_fill_polygons(distances, velocities, q1)
-    above_q3_polygons, _ = get_fill_polygons(distances, velocities, q3)
+    # Process theoretical velocity data if available
+    if theoretical_profile_points:
+        theoretical_distances = [p.distance_from_start for p in theoretical_profile_points]
+        theoretical_velocities = [p.horizontal_speed * 3.6 for p in theoretical_profile_points]
+        
+        # Add theoretical velocity line
+        fig.add_trace(go.Scatter(
+            x=theoretical_distances,
+            y=theoretical_velocities,
+            mode='lines',
+            line=dict(
+                color='rgba(255, 100, 0, 1)',  # Orange for theoretical data
+                width=3,
+                shape='spline',
+                smoothing=1.3,
+                dash='dash'
+            ),
+            name='Theoretical Velocity',
+            hoverinfo='y+name'
+        ))
+    
+    # Calculate velocity quartiles for actual data
+    q1, median, q3 = calculate_velocity_quartiles(actual_velocities)
+    
+    # Get fill polygons for different velocity ranges (actual data only)
+    _, below_q1_polygons = get_fill_polygons(actual_distances, actual_velocities, q1)
+    above_q3_polygons, _ = get_fill_polygons(actual_distances, actual_velocities, q3)
     
     # Add fill for slow sections (bottom quartile)
     for poly in below_q1_polygons:
@@ -309,10 +347,10 @@ def create_velocity_profile_figure(profile_points: List[TrackAnalysis],
         annotation_font_size=10
     )
     
-    # Add shadow effect
+    # Add shadow effect for actual data
     fig.add_trace(go.Scatter(
-        x=distances,
-        y=velocities,
+        x=actual_distances,
+        y=actual_velocities,
         mode='lines',
         line=dict(
             color='rgba(50, 205, 50, 0.3)',
@@ -323,43 +361,44 @@ def create_velocity_profile_figure(profile_points: List[TrackAnalysis],
         hoverinfo='none',
         showlegend=False
     ))
-    
-    # Main velocity line
-    fig.add_trace(go.Scatter(
-        x=distances,
-        y=velocities,
-        mode='lines',
-        line=dict(
-            color='rgba(0, 180, 0, 1)',
-            width=3,
-            shape='spline',
-            smoothing=1.3
-        ),
-        hoverinfo='y+name',
-        name='Velocity',
-        showlegend=False
-    ))
 
     if highlight_distance is not None:
-        idx = np.argmin(np.abs(np.array(distances) - highlight_distance))
+        # Highlight actual data point
+        actual_idx = np.argmin(np.abs(np.array(actual_distances) - highlight_distance))
         fig.add_trace(go.Scatter(
-            x=[distances[idx]],
-            y=[velocities[idx]],
+            x=[actual_distances[actual_idx]],
+            y=[actual_velocities[actual_idx]],
             mode='markers',
             marker=dict(
                 size=12,
                 color='gold',
                 line=dict(width=2, color='black')
             ),
-            hoverinfo='none',
+            name='Highlight',
             showlegend=False
         ))
+        
+        # Highlight theoretical data point if available
+        if theoretical_profile_points:
+            theoretical_idx = np.argmin(np.abs(np.array(theoretical_distances) - highlight_distance))
+            fig.add_trace(go.Scatter(
+                x=[theoretical_distances[theoretical_idx]],
+                y=[theoretical_velocities[theoretical_idx]],
+                mode='markers',
+                marker=dict(
+                    size=12,
+                    color='orange',
+                    line=dict(width=2, color='black')
+                ),
+                name='Theoretical Highlight',
+                showlegend=False
+            ))
 
     fig.update_layout(
         xaxis_title='Distance (m)',
         yaxis_title='Velocity (km/h)',
         autosize=True,
-        margin=dict(l=20, r=60, t=20, b=20),  # Reduced top margin
+        margin=dict(l=20, r=60, t=20, b=20),
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
         xaxis=dict(
@@ -371,6 +410,71 @@ def create_velocity_profile_figure(profile_points: List[TrackAnalysis],
             showgrid=True,
             gridcolor='rgba(200, 200, 200, 0.2)',
             linecolor='rgba(200, 200, 200, 0.8)'
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
         )
     )
+    return fig
+
+def create_comparison_velocity_figure(velocity_data: Dict[str, Any],
+                                      highlight_distance: Optional[float] = None) -> go.Figure:
+    """Create a comparison figure showing multiple theoretical profiles alongside actual data"""
+    fig = go.Figure()
+    
+    # Add actual velocity data if available
+    if velocity_data.get('actual'):
+        actual_distances = [p.distance_from_start for p in velocity_data['actual']]
+        actual_velocities = [p.horizontal_speed * 3.6 for p in velocity_data['actual']]
+        
+        fig.add_trace(go.Scatter(
+            x=actual_distances,
+            y=actual_velocities,
+            mode='lines',
+            line=dict(color='rgba(0, 0, 0, 1)', width=4, shape='spline'),
+            name='Actual Velocity',
+            hoverinfo='y+name'
+        ))
+    
+    # Add theoretical profiles for different abilities
+    theoretical_profiles = velocity_data.get('theoretical', {})
+    colors = ['rgba(255, 0, 0, 0.8)', 'rgba(255, 165, 0, 0.8)', 'rgba(0, 128, 0, 0.8)', 
+              'rgba(0, 0, 255, 0.8)', 'rgba(128, 0, 128, 0.8)']
+    
+    for i, (ability_name, profile_data) in enumerate(theoretical_profiles.items()):
+        if i < len(colors):
+            analysis_points = profile_data.get('analysis_points', [])
+            if analysis_points:
+                distances = [p.distance_from_start for p in analysis_points]
+                velocities = [p.horizontal_speed * 3.6 for p in analysis_points]
+                
+                fig.add_trace(go.Scatter(
+                    x=distances,
+                    y=velocities,
+                    mode='lines',
+                    line=dict(color=colors[i], width=2, shape='spline', dash='dot'),
+                    name=f'{ability_name} Theoretical',
+                    hoverinfo='y+name'
+                ))
+    
+    fig.update_layout(
+        xaxis_title='Distance (m)',
+        yaxis_title='Velocity (km/h)',
+        autosize=True,
+        margin=dict(l=20, r=60, t=20, b=20),
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        )
+    )
+    
     return fig

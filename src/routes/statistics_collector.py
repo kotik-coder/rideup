@@ -4,54 +4,33 @@ import numpy as np
 from src.routes.spot import Spot
 from src.routes.profile_analyzer import Profile, ProfileSegment
 from src.routes.route_processor import ProcessedRoute
-from src.routes.track import Track, TrackAnalysis
+from src.routes.track import Track, TrackAnalysis, TrackPoint
 from src.routes.rating_system import *
 from src.routes.terrain_and_weather import TerrainAnalysis, WeatherData
+from src.routes.velocity_profily import VelocityPoint, VelocityProfileCalculator, RiderAbility, RiderParameters, EnvironmentalParameters
+from datetime import datetime
 
 def generate_route_profiles(spot: Spot, proute: ProcessedRoute, associated_tracks: List[Track]) -> Dict[str, Any]:
     """Generate complete route analysis including profile and statistics"""
     profile = Profile(spot.system, proute)
     
     # Calculate additional statistics
-    difficulty = _determine_difficulty(profile, spot.system)    
-    velocity_profiles = _generate_velocity_profiles(proute, associated_tracks)
+    difficulty = _determine_difficulty(profile, spot.system)
+    
+    # Generate actual velocity profiles from GPS tracks
+    actual_velocity_profiles = _generate_velocity_profiles(proute, associated_tracks)
+    
+    # Generate theoretical velocity profiles
+    theoretical_velocity_profiles = _generate_theoretical_velocity_profiles(profile)
     
     return {
         'profile': profile,
         'difficulty': difficulty,
-        'dynamic': velocity_profiles
+        'dynamic': {
+            'actual': actual_velocity_profiles,
+            'theoretical': theoretical_velocity_profiles
+        }
     }
-
-def _determine_difficulty(profile: Profile, spot_system: RatingSystem) -> str:
-    """
-    Calculate route difficulty as weighted average of segment scores
-    Score is independent of route length - it's an average per unit distance
-    """
-    if not profile.segments or not profile.points:
-        return "GREEN"
-    
-    total_distance = profile.points[-1].distance_from_origin
-    if total_distance <= 0:
-        return "GREEN"
-    
-    total_weighted_score = 0
-    total_weight = 0
-    
-    for seg in profile.segments:
-        seg_length = seg.length(profile.points)
-        seg_weight = seg_length / total_distance  # Fraction of total route
-        
-        # Calculate segment score based on gradient and features
-        seg_score = seg._calculate_segment_score(profile.points, spot_system)
-        
-        # Weight by segment length
-        total_weighted_score += seg_score * seg_weight
-        total_weight += seg_weight
-    
-    # Final score is the weighted average
-    final_score = total_weighted_score / total_weight if total_weight > 0 else 0
-    
-    return RouteDifficulty.from_score(final_score, spot_system).name
 
 def _generate_velocity_profiles(proute: ProcessedRoute, tracks: List[Track]) -> List[TrackAnalysis]:
     """Generate velocity profiles from GPS tracks that match the route"""
@@ -85,6 +64,53 @@ def _generate_velocity_profiles(proute: ProcessedRoute, tracks: List[Track]) -> 
             velocity_profiles.extend(_create_basic_velocity_analysis(track))
     
     return velocity_profiles
+
+def _generate_theoretical_velocity_profiles(profile: Profile) -> Dict[str, Any]:
+    """Generate theoretical velocity profiles for different rider abilities"""
+    theoretical_profiles = {}
+    
+    # Generate profiles for different rider abilities
+    for ability in RiderAbility:
+        # Create velocity profile calculator
+        rider_params = RiderParameters(ability=ability)
+        env_params = EnvironmentalParameters()
+        calculator = VelocityProfileCalculator(profile, rider_params, env_params)
+        
+        # Calculate velocity profile
+        velocity_points = calculator.calculate_velocity_profile()
+        
+        # Convert to format compatible with graph generation
+        converted_points = _convert_velocity_points_to_track_analysis(velocity_points)
+        
+        # Get segment statistics
+        segment_stats = calculator.get_segment_statistics()
+        
+        theoretical_profiles[ability.name] = {
+            'analysis_points': converted_points,
+            'segment_statistics': segment_stats,
+            'rider_ability': ability.name,
+            'total_time': sum(1/vp.velocity for vp in velocity_points if vp.velocity > 0),
+            'avg_velocity': np.mean([vp.velocity for vp in velocity_points]) if velocity_points else 0,
+            'max_velocity': max([vp.velocity for vp in velocity_points]) if velocity_points else 0
+        }
+    
+    return theoretical_profiles
+
+def _convert_velocity_points_to_track_analysis(velocity_points: List[VelocityPoint]) -> List[TrackAnalysis]:
+    """Convert VelocityPoint objects to TrackAnalysis format for compatibility"""
+    track_analysis_points = []
+    
+    for vp in velocity_points:
+        track_analysis = TrackAnalysis(
+            horizontal_speed=vp.velocity,
+            vertical_speed=0.0,  # Not calculated in theoretical model
+            horizontal_accel=vp.acceleration,
+            vertical_accel=0.0,   # Not calculated in theoretical model
+            distance_from_start=vp.distance
+        )
+        track_analysis_points.append(track_analysis)
+    
+    return track_analysis_points
 
 def _create_basic_velocity_analysis(track: Track) -> List[TrackAnalysis]:
     """Create basic velocity analysis from track points when no analysis exists"""
@@ -167,3 +193,36 @@ def _create_basic_velocity_analysis(track: Track) -> List[TrackAnalysis]:
         ))
     
     return analysis_points
+
+def _determine_difficulty(profile: Profile, spot_system: RatingSystem) -> str:
+    """
+    Calculate route difficulty as weighted average of segment scores
+    Score is independent of route length - it's an average per unit distance
+    """
+    if not profile.segments or not profile.points:
+        return "GREEN"
+    
+    total_distance = profile.points[-1].distance_from_origin
+    if total_distance <= 0:
+        return "GREEN"
+    
+    total_weighted_score = 0
+    total_weight = 0
+    
+    for seg in profile.segments:
+        seg_length = seg.length(profile.points)
+        seg_weight = seg_length / total_distance  # Fraction of total route
+        
+        # Calculate segment score based on gradient and features
+        seg_score = seg._calculate_segment_score(profile.points, spot_system)
+        
+        # Weight by segment length
+        total_weighted_score += seg_score * seg_weight
+        total_weight += seg_weight
+    
+    # Final score is the weighted average
+    final_score = total_weighted_score / total_weight if total_weight > 0 else 0
+    
+    print(f"Final score is {final_score:.2f}")
+    
+    return RouteDifficulty.from_score(final_score, spot_system).name
