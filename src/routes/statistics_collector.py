@@ -1,14 +1,12 @@
-from typing import Any, List, Dict, Optional
+from typing import Any, List, Dict
 import numpy as np
 
 from src.routes.spot import Spot
-from src.routes.profile_analyzer import Profile, ProfileSegment
+from src.routes.profile_analyzer import Profile
 from src.routes.route_processor import ProcessedRoute
-from src.routes.track import Track, TrackAnalysis, TrackPoint
+from src.routes.track import Track, TrackAnalysis
 from src.routes.rating_system import *
-from src.routes.terrain_and_weather import TerrainAnalysis, WeatherData
-from src.routes.velocity_profily import VelocityPoint, VelocityProfileCalculator, RiderAbility, RiderParameters, EnvironmentalParameters
-from datetime import datetime
+from src.routes.velocity_profile import *
 
 def generate_route_profiles(spot: Spot, proute: ProcessedRoute, associated_tracks: List[Track]) -> Dict[str, Any]:
     """Generate complete route analysis including profile and statistics"""
@@ -20,8 +18,8 @@ def generate_route_profiles(spot: Spot, proute: ProcessedRoute, associated_track
     # Generate actual velocity profiles from GPS tracks
     actual_velocity_profiles = _generate_velocity_profiles(proute, associated_tracks)
     
-    # Generate theoretical velocity profiles
-    theoretical_velocity_profiles = _generate_theoretical_velocity_profiles(profile)
+    # Generate theoretical velocity profiles with spot data
+    theoretical_velocity_profiles = _generate_theoretical_velocity_profiles(profile, spot)
     
     return {
         'profile': profile,
@@ -65,34 +63,56 @@ def _generate_velocity_profiles(proute: ProcessedRoute, tracks: List[Track]) -> 
     
     return velocity_profiles
 
-def _generate_theoretical_velocity_profiles(profile: Profile) -> Dict[str, Any]:
+def _generate_theoretical_velocity_profiles(profile: Profile, spot: Spot) -> Dict[str, Any]:
     """Generate theoretical velocity profiles for different rider abilities"""
     theoretical_profiles = {}
     
-    # Generate profiles for different rider abilities
-    for ability in RiderAbility:
-        # Create velocity profile calculator
-        rider_params = RiderParameters(ability=ability)
-        env_params = EnvironmentalParameters()
-        calculator = VelocityProfileCalculator(profile, rider_params, env_params)
-        
-        # Calculate velocity profile
-        velocity_points = calculator.calculate_velocity_profile()
-        
-        # Convert to format compatible with graph generation
-        converted_points = _convert_velocity_points_to_track_analysis(velocity_points)
-        
-        # Get segment statistics
-        segment_stats = calculator.get_segment_statistics()
-        
-        theoretical_profiles[ability.name] = {
-            'analysis_points': converted_points,
-            'segment_statistics': segment_stats,
-            'rider_ability': ability.name,
-            'total_time': sum(1/vp.velocity for vp in velocity_points if vp.velocity > 0),
-            'avg_velocity': np.mean([vp.velocity for vp in velocity_points]) if velocity_points else 0,
-            'max_velocity': max([vp.velocity for vp in velocity_points]) if velocity_points else 0
+    # Create velocity profile calculator with spot's terrain and weather
+    rider_params = RiderParameters()
+    env_params = EnvironmentalParameters()
+    
+    # Add headwind from weather data if available
+    if spot.weather:
+        env_params.headwind = spot.weather.wind_speed
+    
+    # Pass the spot's terrain and weather data
+    calculator = VelocityProfileCalculator(
+        profile, 
+        rider_params, 
+        env_params,
+        terrain_data=spot.terrain,
+        weather_data=spot.weather
+    )
+    
+    # Calculate velocity profile
+    velocity_points = calculator.calculate_velocity_profile()
+    
+    # Convert to format compatible with graph generation
+    converted_points = _convert_velocity_points_to_track_analysis(velocity_points)
+    
+    # Get segment statistics
+    segment_stats = calculator.get_segment_statistics()
+    
+    # Calculate total time properly
+    total_time = 0.0
+    for i in range(1, len(velocity_points)):
+        dx = velocity_points[i].distance - velocity_points[i-1].distance
+        avg_velocity = (velocity_points[i-1].velocity + velocity_points[i].velocity) / 2
+        if avg_velocity > 0:
+            total_time += dx / avg_velocity
+    
+    theoretical_profiles = {
+        'analysis_points': converted_points,
+        'segment_statistics': segment_stats,
+        'total_time': total_time,
+        'avg_velocity': np.mean([vp.velocity for vp in velocity_points]) if velocity_points else 0,
+        'max_velocity': max([vp.velocity for vp in velocity_points]) if velocity_points else 0,
+        'terrain_conditions': {
+            'traction_score': spot.get_traction() if spot.terrain and spot.weather else 0.8,
+            'surface_types': spot.terrain.surface_types if spot.terrain else {},
+            'weather_condition': spot.weather.condition if spot.weather else 'Unknown'
         }
+    }
     
     return theoretical_profiles
 
@@ -222,7 +242,5 @@ def _determine_difficulty(profile: Profile, spot_system: RatingSystem) -> str:
     
     # Final score is the weighted average
     final_score = total_weighted_score / total_weight if total_weight > 0 else 0
-    
-    print(f"Final score is {final_score:.2f}")
     
     return RouteDifficulty.from_score(final_score, spot_system).name

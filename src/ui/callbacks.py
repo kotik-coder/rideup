@@ -213,9 +213,8 @@ def setup_callbacks(app, spot: Spot, route_processor: RouteProcessor):
             theoretical_points = None
             
             # For velocity graph, we can show either comparison or individual theoretical profile
-            # Let's show the INTERMEDIATE theoretical profile by default
-            if 'theoretical' in velocity_data and 'INTERMEDIATE' in velocity_data['theoretical']:
-                theoretical_points = velocity_data['theoretical']['INTERMEDIATE']['analysis_points']
+            if 'theoretical' in velocity_data:
+                theoretical_points = velocity_data['theoretical']['analysis_points']
             
             fig = create_velocity_profile_figure(
                 actual_profile_points=actual_points,
