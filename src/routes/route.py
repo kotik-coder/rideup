@@ -20,6 +20,24 @@ class GeoPoint:
             'lon': self.lon,
             'elevation': self.elevation
         }
+        
+    def bearing_to(self, point: "GeoPoint") -> float:
+        """
+        Calculate initial bearing from this point to another point.
+        Returns bearing in degrees (0-360), where 0° is North.
+        """
+        lat1 = math.radians(self.lat)
+        lon1 = math.radians(self.lon)
+        lat2 = math.radians(point.lat)
+        lon2 = math.radians(point.lon)
+
+        dlon = lon2 - lon1
+
+        y = math.sin(dlon) * math.cos(lat2)
+        x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
+
+        bearing = math.degrees(math.atan2(y, x))
+        return (bearing + 360) % 360
     
     def distance_to(self, point: "GeoPoint"):
         R = 6371000 # Radius of Earth in meters

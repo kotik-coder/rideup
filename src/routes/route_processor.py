@@ -6,6 +6,7 @@ from scipy.interpolate import PchipInterpolator, interp1d, CubicSpline
 from typing import Any, Dict, List, Tuple
 from scipy.signal import savgol_filter
 
+from src.routes.mutable_route import EstablishedRoute
 from src.routes.route_helpers import calculate_sg_window_length, geodesic_integrand, resample_uniformly
 from src.routes. baseline import Baseline
 from src.routes.route import GeoPoint, Route
@@ -213,27 +214,37 @@ class ProcessedRoute:
             self.smooth_points[i].distance_from_origin = cumulative_distance
             t_prev = t_curr  # Update for next iteration
 
+# route_processor.py (add this method to the RouteProcessor class)
 class RouteProcessor:
     def __init__(self, local_photos: List[SpotPhoto], all_tracks: List[Track]):
         self.checkpoint_generator = CheckpointGenerator(local_photos)
         self.all_tracks = all_tracks
 
     def process_route(self, route: Route) -> ProcessedRoute:
-        """Main processing pipeline for a route."""
-    
+        """Main processing pipeline for a route - works for both Route and EstablishedRoute"""
         if not route:
             return        
         
         print_step("RouteProcessor", f"Starting processing for route: {route.name}")        
 
         # Get tracks associated with this route
-        associated_tracks = [t for t in self.all_tracks if t.route == route]        
+        associated_tracks = []
+        if isinstance(route, EstablishedRoute):
+            # For established routes, get tracks from all original routes
+            for original_route in route.original_routes.values():
+                route_tracks = [t for t in self.all_tracks if t.route and t.route.name == original_route.name]
+                associated_tracks.extend(route_tracks)
+        else:
+            # For regular routes, get tracks for this specific route
+            associated_tracks = [t for t in self.all_tracks if t.route == route]
+        
         processed_route = ProcessedRoute(route)                
         
         processed_route.checkpoints = self.checkpoint_generator.generate_checkpoints(
             processed_route.smooth_points,
             associated_tracks
         )
+        
         print_step("RouteProcessor", f"Route '{route.name}': Generated {len(processed_route.checkpoints)} checkpoints.")
                 
         processed_route.calculate_precise_distances()

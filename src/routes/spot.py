@@ -1,7 +1,11 @@
+# spot.py
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
 import osmnx as ox
 from shapely import MultiPolygon, Polygon
+
+# Add imports for route merging
+from src.routes.mutable_route import HierarchicalRouteMerger, RouteSimilarityConfig, EstablishedRoute, create_route_merger
 
 # Assuming these are available in your project structure
 from src.routes.rating_system import RatingSystem
@@ -39,6 +43,7 @@ class Spot:
         self._photos_loaded = False
         self.local_photos = []
         self.routes = []
+        self.established_routes = []  # Initialize established routes
         self.tracks = []
         self.geometry = []
         self.processed_routes = {}
@@ -134,16 +139,31 @@ class Spot:
                 )
             )
 
-    def get_processed_route(self, rp : RouteProcessor, route : Route, selected_index : int) -> ProcessedRoute:
+    def get_processed_route(self, rp: RouteProcessor, route: Route, selected_index: int) -> ProcessedRoute:
+        """Get processed route - works for both Route and EstablishedRoute objects"""
         route_dict = self.processed_routes
         
         if selected_index in route_dict:     
             processed_route = self.processed_routes[selected_index]
         else:                
-            route_dict[selected_index] = rp.process_route(route)
-            processed_route = route_dict[selected_index]
+            processed_route = rp.process_route(route)
+            route_dict[selected_index] = processed_route
             
-        return processed_route
+        return processed_route    
+
+    def get_all_routes_for_processing(self) -> List[Route]:
+        """Get all routes for processing, including both original and established routes"""
+        all_routes = []
+        
+        # Add original routes
+        all_routes.extend(self.routes)
+        
+        # Add established routes as unified routes
+        for established_route in self.established_routes:
+            unified_route = established_route.get_unified_route(min_confidence=0.5)
+            all_routes.append(unified_route)
+            
+        return all_routes
         
     def load_valid_routes_and_tracks(self):        
         print_step("SpotLoader", "Loading routes and tracks...")
@@ -151,19 +171,61 @@ class Spot:
         # Collect all (Route, List[Track]) pairs from all GPX files
         loaded_route_track_pairs = LocalGPXLoader.load_all_gpx()
         
-        self.routes = [] # Reset to store only valid Route objects
+        self.routes = [] # Reset to store all Route objects (including EstablishedRoute)
         self.tracks = [] # Reset to be a flattened list of all valid Track objects
 
+        # First pass: load all valid routes and tracks
+        valid_routes = []
         for route, associated_tracks in loaded_route_track_pairs:
             if route.is_valid_route(self.polygon):
-                self.routes.append(route)
+                valid_routes.append(route)
                 # Set the route reference for each track
                 for track in associated_tracks:
                     track.route = route
                 self.tracks.extend(associated_tracks)
 
-        print_step("SpotLoader", f"Found {len(self.routes)} valid routes for '{self.name}'")
-        print_step("SpotLoader", f"Found {len(self.tracks)} tracks for '{self.name}'")        
+        print_step("SpotLoader", f"Found {len(valid_routes)} valid routes for '{self.name}'")
+        print_step("SpotLoader", f"Found {len(self.tracks)} tracks for '{self.name}'")
+
+        # Second pass: merge similar routes into established routes
+        if len(valid_routes) > 1:
+            print_step("RouteMerging", "Analyzing route similarities and merging...")
+            
+            # Configure route merging
+            config = RouteSimilarityConfig(
+                max_deviation_distance=15.0,
+                min_segment_length=50.0,
+                similarity_threshold=0.7,
+                cluster_epsilon=10.0
+            )
+            
+            merger = create_route_merger(config)
+            merger.build_route_graph(valid_routes)
+            established_routes = merger.merge_routes()
+            
+            print_step("RouteMerging", f"Created {len(established_routes)} established routes from {len(valid_routes)} original routes")
+            
+            # Replace original routes with established routes where applicable
+            routes_to_keep = []
+            for route in valid_routes:
+                # Check if this route is part of any established route
+                is_merged = False
+                for established_route in established_routes:
+                    if route.name in established_route.original_routes:
+                        is_merged = True
+                        break
+                
+                if not is_merged:
+                    routes_to_keep.append(route)
+            
+            # Add all established routes and standalone routes
+            self.routes = established_routes + routes_to_keep
+            
+        else:
+            # No merging needed if only one route
+            self.routes = valid_routes
+
+        print_step("SpotLoader", f"Final count: {len(self.routes)} total routes ({len([r for r in self.routes if isinstance(r, EstablishedRoute)])} established + {len([r for r in self.routes if not isinstance(r, EstablishedRoute)])} standalone)")
 
         return self.routes
 
