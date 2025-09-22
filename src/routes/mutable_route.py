@@ -33,10 +33,6 @@ class RouteSegment:
             return 0.0
         return sum(self.points[i].distance_to(self.points[i+1]) 
                   for i in range(len(self.points)-1))
-    
-    def add_source_route(self, route_name: str):
-        self.source_route_names.add(route_name)
-        self.confidence = len(self.source_route_names)
 
 @dataclass
 class EstablishedRoute(Route):
@@ -45,17 +41,11 @@ class EstablishedRoute(Route):
     original_routes: Dict[str, Route]   = field(default_factory=dict)
     junction_points: List[GeoPoint]     = field(default_factory=list)
     route_graph:     nx.DiGraph         = field(default_factory=nx.DiGraph)
-    is_linear:       bool               = field(default=True)  # Track linearity status
+    is_linear:       bool               = field(default=True)
     
     def __init__(self, name: str, segments: List[RouteSegment], original_routes: Dict[str, Route]):
-        # Create unified route from segments
-        unified_points = []
-        unified_elevations = []
-        
-        for segment in segments:
-            if segment.confidence >= 0.5:  # Use only high-confidence segments
-                unified_points.extend(segment.points)
-                unified_elevations.extend([p.elevation for p in segment.points])
+        # Reconstruct continuous path from segments using proper topological ordering
+        unified_points = self._reconstruct_continuous_path(segments)
         
         # Calculate total distance
         total_distance = sum(seg.length() for seg in segments)
@@ -64,7 +54,7 @@ class EstablishedRoute(Route):
         super().__init__(
             name=name,
             points=unified_points,
-            elevations=unified_elevations,
+            elevations=[p.elevation for p in unified_points],
             descriptions=[f"Merged from {len(original_routes)} routes"],
             total_distance=total_distance
         )
@@ -76,9 +66,79 @@ class EstablishedRoute(Route):
         self.route_graph = nx.DiGraph()
         self.is_linear = True
         
-        # Verify linearity of the merged route
+        # Verify linearity
         self._verify_linearity()
     
+    def _reconstruct_continuous_path(self, segments: List[RouteSegment]) -> List[GeoPoint]:
+        """Fixed path reconstruction"""
+        if not segments:
+            return []
+        
+        if len(segments) == 1:
+            return segments[0].points
+        
+        # Build directed graph with proper connectivity
+        segment_graph = nx.DiGraph()
+        for i, seg in enumerate(segments):
+            segment_graph.add_node(i, segment=seg, length=len(seg.points))
+        
+        # Add edges between connected segments with proper direction
+        for i in range(len(segments)):
+            for j in range(len(segments)):
+                if i != j and self._segments_are_connected(segments[i], segments[j]):
+                    distance = segments[i].points[-1].distance_to(segments[j].points[0])
+                    segment_graph.add_edge(i, j, weight=distance)
+        
+        try:
+            # Find the longest path by number of points
+            longest_path = []
+            max_length = 0
+            
+            for start_node in segment_graph.nodes():
+                for end_node in segment_graph.nodes():
+                    if start_node != end_node and nx.has_path(segment_graph, start_node, end_node):
+                        path = nx.shortest_path(segment_graph, start_node, end_node, weight='weight')
+                        path_length = sum(segment_graph.nodes[n]['length'] for n in path)
+                        
+                        if path_length > max_length:
+                            max_length = path_length
+                            longest_path = path
+            
+            # Reconstruct points
+            if longest_path:
+                reconstructed = []
+                for node_idx in longest_path:
+                    reconstructed.extend(segments[node_idx].points)
+                return reconstructed
+            
+        except nx.NetworkXException:
+            pass
+        
+        return self._fallback_path_reconstruction(segments)
+
+    def _segments_are_connected(self, seg1: RouteSegment, seg2: RouteSegment) -> bool:
+        """Check if two segments are connected"""
+        if not seg1.points or not seg2.points:
+            return False
+        
+        # Check endpoint proximity
+        end_to_start = seg1.points[-1].distance_to(seg2.points[0])
+        end_to_end = seg1.points[-1].distance_to(seg2.points[-1])
+        start_to_start = seg1.points[0].distance_to(seg2.points[0])
+        start_to_end = seg1.points[0].distance_to(seg2.points[-1])
+        
+        return min(end_to_start, end_to_end, start_to_start, start_to_end) < 50.0
+
+    def _fallback_path_reconstruction(self, segments: List[RouteSegment]) -> List[GeoPoint]:
+        """Fallback method for path reconstruction"""
+        # Sort segments by confidence and concatenate
+        sorted_segments = sorted(segments, key=lambda s: s.confidence, reverse=True)
+        unified_points = []
+        for segment in sorted_segments:
+            if segment.confidence >= 0.5:
+                unified_points.extend(segment.points)
+        return unified_points
+
     def _verify_linearity(self):
         """Verify that the merged route forms a continuous, linear path"""
         if len(self.points) < 2:
@@ -211,177 +271,196 @@ class EstablishedRoute(Route):
         # Update the points if the order changed
         if sorted_points != self.points:
             self.points = sorted_points
-            
-    def get_unified_route(self, min_confidence: float = 0.5) -> 'EstablishedRoute':
-        """Return self since we're already a unified route"""
-        return self
-    
-    def find_alternatives_at_point(self, point: GeoPoint, max_distance: float = 20.0) -> List[RouteSegment]:
-        """Find all alternative paths near a given location"""
-        alternatives = []
-        for segment in self.segments:
-            distances = [point.distance_to(p) for p in segment.points]
-            if min(distances) <= max_distance:
-                alternatives.append(segment)
-        return alternatives
 
 @dataclass
 class RouteSimilarityConfig:
-    max_deviation_distance: float = 12.0   # Realistic for consumer GPS
     min_segment_length: float = 30.0
     similarity_threshold: float = 0.5
-    min_matching_points: int = 5           # Allow shorter matches
+    min_matching_points: int = 5
     fork_angle_threshold: float = 45.0
     search_window_size: int = 20
-    cluster_epsilon: float = 8.0           # Allow clustering of nearby points
+    cluster_epsilon: float = 8.0
     statistical_confidence_level: float = 0.95
+    eps = 10.0             # meters — points within 10m are considered "matching"
+    lcss_window_size = 50
+        
 
 class RouteSimilarityAnalyzer:
     """Analyzes spatial similarity between routes and identifies common segments"""
     
     def __init__(self, config: Optional[RouteSimilarityConfig] = None):
         self.config = config or RouteSimilarityConfig()
-        self.spatial_index = index.Index()
-        self.segment_bboxes = {}
-    
-    def compute_frechet_distance(self, track1: List[GeoPoint], track2: List[GeoPoint]) -> float:
-        """Compute discrete Fréchet distance between two point sequences using proper geodesic distance"""
-        if not track1 or not track2:
-            return float('inf')
         
+    def _compute_lcss_core(
+        self,
+        track1: List[GeoPoint],
+        track2: List[GeoPoint],
+        eps: float = 10,
+        window: int = 50,
+        return_alignment: bool = False
+    ) -> Tuple[float, Optional[List[Tuple[int, int]]]]:
+        """
+        Unified LCSS computation.
+        Returns:
+            - similarity score (float)
+            - alignment (List[Tuple[int, int]]) if return_alignment=True, else None
+        """
         m, n = len(track1), len(track2)
-        dist_matrix = np.zeros((m, n))
+        if m == 0 or n == 0:
+            return 0.0, [] if return_alignment else None
 
-        for i in range(m):
-            for j in range(n):
-                dist_matrix[i, j] = track1[i].distance_to(track2[j])
-        
-        # Dynamic programming for Fréchet distance
-        dp = np.zeros((m, n))
-        dp[0, 0] = dist_matrix[0, 0]
-        
-        for i in range(1, m):
-            dp[i, 0] = max(dp[i-1, 0], dist_matrix[i, 0])
-        for j in range(1, n):
-            dp[0, j] = max(dp[0, j-1], dist_matrix[0, j])
-        
-        for i in range(1, m):
-            for j in range(1, n):
-                dp[i, j] = max(min(dp[i-1, j], dp[i, j-1], dp[i-1, j-1]), 
-                              dist_matrix[i, j])
-        
-        return dp[m-1, n-1]
+        # DP table for lengths
+        dp = np.zeros((m + 1, n + 1), dtype=int)
+        backtrack = None
+
+        if return_alignment:
+            # 0 = match (diag), 1 = skip track1 (up), 2 = skip track2 (left)
+            backtrack = np.zeros((m + 1, n + 1), dtype=int)
+
+        # Fill DP table
+        for i in range(1, m + 1):
+            j_start = max(1, i - window)
+            j_end = min(n + 1, i + window + 1)
+
+            for j in range(j_start, j_end):
+                dist = track1[i-1].distance_to(track2[j-1])
+                if dist <= eps:
+                    dp[i][j] = dp[i-1][j-1] + 1
+                    if return_alignment:
+                        backtrack[i][j] = 0
+                else:
+                    if dp[i-1][j] >= dp[i][j-1]:
+                        dp[i][j] = dp[i-1][j]
+                        if return_alignment:
+                            backtrack[i][j] = 1
+                    else:
+                        dp[i][j] = dp[i][j-1]
+                        if return_alignment:
+                            backtrack[i][j] = 2
+
+        # Compute similarity
+        lcss_length = dp[m][n]
+        similarity = lcss_length / min(m, n)  # or max(m, n) — your preference
+
+        # Backtrack for alignment if requested
+        alignment = None
+        if return_alignment and backtrack is not None:
+            alignment = []
+            i, j = m, n
+            while i > 0 and j > 0:
+                if backtrack[i][j] == 0:
+                    alignment.append((i-1, j-1))
+                    i -= 1
+                    j -= 1
+                elif backtrack[i][j] == 1:
+                    i -= 1
+                else:
+                    j -= 1
+            alignment = alignment[::-1]
+
+        return float(similarity), alignment
     
     def find_common_segments(self, route1: Route, route2: Route) -> List[Tuple[int, int, int, int]]:
-        """Find matching segments between two routes with better filtering"""
-        common_segments = []
+        """
+        Find contiguous segments where LCSS matched points are close in space.
+        Returns list of segments: (start1, end1, start2, end2)
+        """
         points1, points2 = route1.points, route2.points
-        
-        if len(points1) < 10 or len(points2) < 10:
-            return []  # Skip very short routes
-        
-        # Calculate overall route similarity first
-        overall_similarity = self._calculate_route_similarity(route1, route2)
-        if overall_similarity < 0.4:  # Only merge routes with at least 40% similarity (was 0.3)
-            print(f"DEBUG: Rejecting merge between '{route1.name}' and '{route2.name}' — similarity too low ({overall_similarity:.2f})")
+
+        if len(points1) < 5 or len(points2) < 5:
             return []
-        
-        # Build spatial index for route2
-        rtree_idx = index.Index()
-        for j, p in enumerate(points2):
-            approx_deg_threshold = self.config.max_deviation_distance / 111000
-            rtree_idx.insert(j, (p.lon - approx_deg_threshold, p.lat - approx_deg_threshold, 
-                                p.lon + approx_deg_threshold, p.lat + approx_deg_threshold))
-        
-        i = 0
-        while i < len(points1) - self.config.min_matching_points:
-            best_match = None
-            best_length = 0
-            
-            # Find nearby points in route2
-            p1 = points1[i]
-            approx_deg_threshold = self.config.max_deviation_distance / 111000
-            nearby_indices = list(rtree_idx.intersection(
-                (p1.lon - approx_deg_threshold, p1.lat - approx_deg_threshold, 
-                 p1.lon + approx_deg_threshold, p1.lat + approx_deg_threshold)
-            ))
-            
-            for j in nearby_indices:
-                if self._points_similar(points1[i], points2[j]):
-                    length = self._extend_match(points1, points2, i, j)
-                    # Require longer matches and better alignment
-                    if (length > best_length and 
-                        length >= self.config.min_matching_points and
-                        self._check_segment_alignment(points1[i:i+length], points2[j:j+length])):
-                        best_length = length
-                        best_match = (i, i + length - 1, j, j + length - 1)
-            
-            if best_match:
-                start1, end1, start2, end2 = best_match
-                print(f"ACCEPTED: Match between '{route1.name}' [{start1}:{end1}] and '{route2.name}' [{start2}:{end2}] (length={best_length})")
-                common_segments.append(best_match)
-                i = best_match[1] + 5  # Skip ahead to avoid overlapping matches
+
+        # Auto-tune eps if not set
+        if not hasattr(self.config, 'eps') or self.config.eps <= 0:
+            self.config.eps = self.calculate_eps_for_lcss(points1, points2)
+
+        # Get LCSS alignment (list of matched index pairs)
+        alignment = self.compute_lcss_alignment(points1, points2)
+
+        if not alignment:
+            return []
+
+        common_segments = []
+        current_segment = None
+        min_segment_length = self.config.min_matching_points
+
+        for idx1, idx2 in alignment:
+            # Since LCSS only matches points within `eps`, we don't need to re-check distance
+            # But you can optionally double-check:
+            # distance = points1[idx1].distance_to(points2[idx2])
+            # if distance > self.config.eps: continue  # shouldn't happen
+
+            if current_segment is None:
+                current_segment = [idx1, idx1, idx2, idx2]
             else:
-                i += 1            
-        
+                # Check if this is a continuation (consecutive in both tracks)
+                # Optional: allow small gaps? You can relax this.
+                if (idx1 == current_segment[1] + 1) and (idx2 == current_segment[3] + 1):
+                    current_segment[1] = idx1
+                    current_segment[3] = idx2
+                else:
+                    # End current segment if long enough
+                    if current_segment[1] - current_segment[0] + 1 >= min_segment_length:
+                        common_segments.append(tuple(current_segment))
+                    # Start new segment
+                    current_segment = [idx1, idx1, idx2, idx2]
+
+        # Add final segment
+        if current_segment and (current_segment[1] - current_segment[0] + 1 >= min_segment_length):
+            common_segments.append(tuple(current_segment))
+
         return common_segments
     
+    def compute_lcss_alignment(self, track1: List[GeoPoint], track2: List[GeoPoint]) -> List[Tuple[int, int]]:
+        _, alignment = self._compute_lcss_core(
+            track1, track2,
+            eps=self.config.eps,
+            window=self.config.lcss_window_size,
+            return_alignment=True
+        )
+        return alignment or []
+            
     def _calculate_route_similarity(self, route1: Route, route2: Route) -> float:
-        """Calculate overall similarity between two routes (0-1)"""
-        # Sample points from both routes for comparison
-        sample_points1 = self._sample_route_points(route1.points, 50)
-        sample_points2 = self._sample_route_points(route2.points, 50)
+        """Calculate similarity based on LCSS — minimal adaptation"""
+        if len(route1.points) < 5 or len(route2.points) < 5:
+            return 0.0
         
-        # Calculate percentage of points that are close
-        close_points = 0
-        for p1 in sample_points1:
-            for p2 in sample_points2:
-                if p1.distance_to(p2) <= self.config.max_deviation_distance * 2:  # More lenient for overall similarity
-                    close_points += 1
-                    break
-        
-        return close_points / len(sample_points1)
-    
-    def _sample_route_points(self, points: List[GeoPoint], num_samples: int) -> List[GeoPoint]:
-        """Sample points evenly along the route"""
-        if len(points) <= num_samples:
-            return points
-        step = len(points) // num_samples
-        return points[::step]
-    
-    def _check_segment_alignment(self, seg1: List[GeoPoint], seg2: List[GeoPoint]) -> bool:
-        """Check if two segments have similar direction and curvature"""
-        if len(seg1) < 3 or len(seg2) < 3:
-            return True  # Too short to check alignment
-        
-        # Calculate average bearing difference
-        bearing_diffs = []
-        for i in range(1, min(len(seg1), len(seg2))):
-            bearing1 = seg1[i-1].bearing_to(seg1[i])
-            bearing2 = seg2[i-1].bearing_to(seg2[i])
-            diff = abs((bearing1 - bearing2 + 180) % 360 - 180)
-            bearing_diffs.append(diff)
-        
-        avg_diff = np.mean(bearing_diffs)
-        return avg_diff < 30  # Allow up to 30 degrees average bearing difference (was 45)
-    
-    def _points_similar(self, p1: GeoPoint, p2: GeoPoint) -> bool:
-        """Check if two points are spatially similar using proper geodesic distance"""
-        return p1.distance_to(p2) <= self.config.max_deviation_distance
-    
-    def _extend_match(self, points1: List[GeoPoint], points2: List[GeoPoint], 
-                     start1: int, start2: int) -> int:
-        """Extend a matching segment as far as possible"""
-        length = 1
-        max_length = min(len(points1) - start1, len(points2) - start2)
-        
-        for offset in range(1, max_length):
-            idx1, idx2 = start1 + offset, start2 + offset
-            if not self._points_similar(points1[idx1], points2[idx2]):
-                break
-            length += 1
-        
-        return length
+        self.config.eps = self.calculate_eps_for_lcss(route1.points, route2.points)
+ 
+        # Compute LCSS similarity (already normalized to [0,1])
+        similarity, _ = self._compute_lcss_core(route1.points, 
+                                                route2.points, 
+                                                self.config.eps, 
+                                                self.config.lcss_window_size, 
+                                                return_alignment=False)
+
+        return similarity
+
+    def calculate_eps_for_lcss(
+    self,
+    track1: List[GeoPoint],
+    track2: List[GeoPoint],
+    multiplier: float = 3.0
+    ) -> float:
+        """
+        Auto-tune eps based on average sampling distance of both tracks.
+        Assumes similar sampling rates. Multiplier typically 1.5 - 3.0.
+        """
+        def avg_segment_distance(track):
+            if len(track) < 2:
+                return 10.0  # fallback
+            total = sum(
+                track[i].distance_to(track[i+1])
+                for i in range(len(track) - 1)
+            )
+            return total / (len(track) - 1)
+
+        d1 = avg_segment_distance(track1)
+        d2 = avg_segment_distance(track2)
+        avg_sampling_dist = (d1 + d2) / 2.0
+
+        eps = multiplier * avg_sampling_dist
+        return max(eps, 5.0)  # never go below 5m for safety 
 
 class HierarchicalRouteMerger:
     """Main class for hierarchical route merging with statistical analysis"""
@@ -390,104 +469,130 @@ class HierarchicalRouteMerger:
         self.analyzer = similarity_analyzer
         self.route_graph = nx.DiGraph()
         self.segment_registry: Dict[str, RouteSegment] = {}
-        self.segment_clusters: Dict[int, List[RouteSegment]] = {}
-    
-    def build_route_graph(self, routes: List[Route]) -> None:
-        """Build a graph representation with better filtering"""
-        # First, filter out routes that are too different
-        similar_route_pairs = []
-        for i, route1 in enumerate(routes):
-            for j, route2 in enumerate(routes[i+1:], i+1):
-                # Check basic compatibility first
-                if self._are_routes_compatible(route1, route2):
-                    print(f"DEBUG: Considering merge between '{route1.name}' and '{route2.name}'")
-                    similar_route_pairs.append((route1, route2))
-                else:
-                    print(f"DEBUG: Rejecting merge between '{route1.name}' and '{route2.name}' — not compatible")
-        
-        # Then process only compatible pairs
-        all_segments = []
-        for route1, route2 in similar_route_pairs:
-            route_name1 = route1.name
-            route_name2 = route2.name
-            
-            self.route_graph.add_node(route_name1, route=route1, type='route')
-            self.route_graph.add_node(route_name2, route=route2, type='route')
-            
-            common_segments = self.analyzer.find_common_segments(route1, route2)
-            
-            for seg_idx, (start1, end1, start2, end2) in enumerate(common_segments):
-                segment_points1 = route1.points[start1:end1+1]
-                segment_points2 = route2.points[start2:end2+1]
-                
-                # Only create segments for substantial matches
-                if len(segment_points1) >= self.analyzer.config.min_matching_points:
-                    segment = RouteSegment(
-                        points=segment_points1,
-                        source_route_names={route_name1, route_name2},
-                        confidence=2.0
-                    )
-                    all_segments.append(segment)
-        
-        # Only cluster if we have substantial segments
-        if all_segments:
-            clustered_segments = self._cluster_segments(all_segments)
-            
-            for cluster_id, segments in clustered_segments.items():
-                # Only create merged segments for clusters with multiple source routes
-                source_routes = set()
-                for seg in segments:
-                    source_routes.update(seg.source_route_names)
-                
-                if len(source_routes) > 1:  # Only merge if multiple routes contribute
-                    merged_segment = self._merge_segment_cluster(segments)
-                    
-                    segment_id = f"cluster_{cluster_id}"
-                    self.segment_registry[segment_id] = merged_segment
-                    self.route_graph.add_node(segment_id, segment=merged_segment, type='segment')
-                        
-                    for route_name in merged_segment.source_route_names:
-                        self.route_graph.add_edge(route_name, segment_id)
-                        self.route_graph.add_edge(segment_id, route_name)
-    
+
     def _are_routes_compatible(self, route1: Route, route2: Route) -> bool:
-        """Check if two routes are potentially compatible for merging"""
-        # Check length ratio - routes should be within 2x length of each other
-        len1 = sum(route1.points[i].distance_to(route1.points[i+1]) for i in range(len(route1.points)-1))
-        len2 = sum(route2.points[i].distance_to(route2.points[i+1]) for i in range(len(route2.points)-1))
-        
-        if max(len1, len2) / min(len1, len2) > 2.0:
-            return False
-        
-        # Check bounding box overlap
+        # Check if routes have any spatial proximity at all
         bbox1 = self._get_route_bbox(route1)
         bbox2 = self._get_route_bbox(route2)
         
-        # Calculate bbox overlap percentage
-        overlap_area = self._bbox_overlap(bbox1, bbox2)
-        area1 = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
-        area2 = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
+        # Check if bounding boxes overlap at all
+        if not self._bboxes_overlap(bbox1, bbox2):
+            print(f"DEBUG: Routes {route1.name} and {route2.name} rejected - no bbox overlap")
+            return False
         
-        min_area = min(area1, area2)
-        if min_area > 0:
-            overlap_ratio = overlap_area / min_area
-            return overlap_ratio > 0.3  # Require at least 30% overlap
+        # Check if routes are close enough to potentially be the same path
+        # Calculate the minimum distance between any points in the two routes
+        min_distance = float('inf')
+        for p1 in route1.points[::10]:  # Sample every 10th point for efficiency
+            for p2 in route2.points[::10]:
+                dist = p1.distance_to(p2)
+                if dist < min_distance:
+                    min_distance = dist
+                if min_distance < self.analyzer.config.max_deviation_distance * 3:  # Early exit
+                    break
+            if min_distance < self.analyzer.config.max_deviation_distance * 3:
+                break
         
-        return False
+        if min_distance > self.analyzer.config.max_deviation_distance * 5:
+            print(f"DEBUG: Routes {route1.name} and {route2.name} rejected - too far apart: {min_distance:.1f}m")
+            return False
+        
+        return True
     
     def _get_route_bbox(self, route: Route) -> Tuple[float, float, float, float]:
         """Get bounding box of a route"""
         lats = [p.lat for p in route.points]
         lons = [p.lon for p in route.points]
         return (min(lons), min(lats), max(lons), max(lats))
+        
+    def _bboxes_overlap(self, bbox1: Tuple[float, float, float, float], 
+                    bbox2: Tuple[float, float, float, float]) -> bool:
+        """Check if two bounding boxes overlap at all"""
+        return not (bbox1[2] < bbox2[0] or bbox1[0] > bbox2[2] or 
+                    bbox1[3] < bbox2[1] or bbox1[1] > bbox2[3])
+
+    def build_route_graph(self, routes: List[Route]) -> None:
+        """Fixed with compatibility check"""
+        if len(routes) < 2:
+            return
+        
+        # Add compatibility check back
+        route_pairs = []
+        for i in range(len(routes)):
+            for j in range(i + 1, len(routes)):
+                print(f"Testing route pair {i} -- {j}")
+                if self._are_routes_compatible(routes[i], routes[j]):
+                    print("Routes are compatible!")
+                    similarity = self.analyzer._calculate_route_similarity(routes[i], routes[j])
+                    print(f"Similarity is {similarity:.2f}")
+                    if similarity >= self.analyzer.config.similarity_threshold:
+                        print("Route pair added!")
+                        route_pairs.append((routes[i], routes[j], similarity))
+        
+        # Sort by similarity (highest first)
+        route_pairs.sort(key=lambda x: x[2], reverse=True)
+        
+        print(f"Processing {len(route_pairs)} compatible route pairs")
+        for route1, route2, similarity in route_pairs:
+            common_segments = self.analyzer.find_common_segments(route1, route2)
+            print(f"Found {len(common_segments)} common segments between {route1.name} and {route2.name} (similarity: {similarity:.2f})")
+                    
+            for seg_idx, (start1, end1, start2, end2) in enumerate(common_segments):
+                # Extract and merge the aligned segments
+                seg1_points = route1.points[start1:end1+1]
+                seg2_points = route2.points[start2:end2+1]
+                
+                merged_points = self._merge_aligned_segment(seg1_points, seg2_points)
+                
+                if len(merged_points) >= self.analyzer.config.min_matching_points:
+                    segment = RouteSegment(
+                        points=merged_points,
+                        source_route_names={route1.name, route2.name},
+                        confidence=similarity  # Use actual similarity as confidence
+                    )
+                    
+                    segment_id = f"seg_{route1.name}_{route2.name}_{seg_idx}"
+                    self.segment_registry[segment_id] = segment
+                    
+                    # Add to graph
+                    self.route_graph.add_node(route1.name, route=route1, type='route')
+                    self.route_graph.add_node(route2.name, route=route2, type='route')
+                    self.route_graph.add_node(segment_id, segment=segment, type='segment')
+                    
+                    self.route_graph.add_edge(route1.name, segment_id)
+                    self.route_graph.add_edge(route2.name, segment_id)
+                    self.route_graph.add_edge(segment_id, route1.name)
+                    self.route_graph.add_edge(segment_id, route2.name)
     
-    def _bbox_overlap(self, bbox1: Tuple[float, float, float, float], 
-                     bbox2: Tuple[float, float, float, float]) -> float:
-        """Calculate area of overlap between two bounding boxes"""
-        x_overlap = max(0, min(bbox1[2], bbox2[2]) - max(bbox1[0], bbox2[0]))
-        y_overlap = max(0, min(bbox1[3], bbox2[3]) - max(bbox1[1], bbox2[1]))
-        return x_overlap * y_overlap
-    
+    def _merge_aligned_segment(self, points1: List[GeoPoint], points2: List[GeoPoint]) -> List[GeoPoint]:
+        """Merge aligned segments using DTW-guided averaging"""
+        if not points1 or not points2:
+            return points1 or points2
+        
+        # Use DTW to find optimal alignment
+        alignment = self.analyzer.compute_lcss_alignment(points1, points2)
+        
+        merged_points = []
+        used_indices1 = set()
+        used_indices2 = set()
+        
+        for idx1, idx2 in alignment:
+            if idx1 in used_indices1 or idx2 in used_indices2:
+                continue
+                
+            if idx1 < len(points1) and idx2 < len(points2):
+                p1, p2 = points1[idx1], points2[idx2]
+                if p1.distance_to(p2) <= self.analyzer.config.max_deviation_distance:
+                    # Weighted average based on point quality (could use elevation std dev etc.)
+                    avg_lat = (p1.lat + p2.lat) / 2
+                    avg_lon = (p1.lon + p2.lon) / 2
+                    avg_ele = (p1.elevation + p2.elevation) / 2
+                    merged_points.append(GeoPoint(avg_lat, avg_lon, avg_ele))
+                    used_indices1.add(idx1)
+                    used_indices2.add(idx2)
+        
+        return merged_points
+
     def _cluster_segments(self, segments: List[RouteSegment]) -> Dict[int, List[RouteSegment]]:
         """Cluster segments that overlap spatially using proper distance calculation AND topological constraints"""
         clusters = {}
@@ -613,17 +718,10 @@ class HierarchicalRouteMerger:
         return RouteSegment(
             points=merged_points,
             source_route_names=all_source_routes,
-            confidence=len(all_source_routes),
+            confidence=sum(seg.confidence for seg in segments) / len(segments),  # Average confidence
             segment_type=SegmentType.COMMON
         )
-    
-    def _find_segment_index(self, point_idx: int, segment_boundaries: List[Tuple[int, int]]) -> int:
-        """Find which segment a point belongs to"""
-        for seg_idx, (start, end) in enumerate(segment_boundaries):
-            if start <= point_idx < end:
-                return seg_idx
-        return 0
-    
+        
     def _calculate_centroid(self, points: List[GeoPoint]) -> GeoPoint:
         """Calculate centroid of a set of points"""
         if not points:
@@ -783,6 +881,6 @@ class HierarchicalRouteMerger:
 
 # Utility function for easy integration
 def create_route_merger(config: Optional[RouteSimilarityConfig] = None) -> HierarchicalRouteMerger:
-    """Convenience function to create a configured route merger — with trail-optimized defaults"""
+    """Convenience function to create a configured route merger"""
     analyzer = RouteSimilarityAnalyzer(config)
     return HierarchicalRouteMerger(analyzer)
