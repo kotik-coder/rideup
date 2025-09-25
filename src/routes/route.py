@@ -1,17 +1,22 @@
 # route.py
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import reduce
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import math
 import shapely
 
-@dataclass
+@dataclass(frozen=True)
 class GeoPoint:
-    """Static geographic point"""
     lat: float
     lon: float
     elevation: float = 0.0
-    distance_from_origin: Optional[float] = 0.0
+
+    # Mutable field — not part of the "identity"
+    distance_from_origin: float = field(default=0.0, compare=False, hash=False)    
+    
+    def set_distance_from_origin(self, dist: float) -> None:
+        # Use object.__setattr__ to bypass frozen restriction
+        object.__setattr__(self, 'distance_from_origin', dist)
     
     def to_dict(self) -> dict:
         """Converts the GeoPoint object to a dictionary for serialization."""
@@ -54,46 +59,26 @@ class GeoPoint:
         c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
         distance = R * c
-        return distance # Distance in meters
-    
-    def bearing_to(self, other_point: "GeoPoint") -> float:
-        """
-        Calculates the initial bearing (direction) from this GeoPoint to another GeoPoint.
-        Args:
-            other_point (GeoPoint): The destination GeoPoint.
-        Returns:
-            float: Bearing in degrees (0-360) from true North.
-        """
-        lat1_rad = math.radians(self.lat)
-        lon1_rad = math.radians(self.lon)
-        lat2_rad = math.radians(other_point.lat)
-        lon2_rad = math.radians(other_point.lon)
+        return distance # Distance in meters    
 
-        delta_lon = lon2_rad - lon1_rad
-
-        x = math.cos(lat2_rad) * math.sin(delta_lon)
-        y = math.cos(lat1_rad) * math.sin(lat2_rad) - math.sin(lat1_rad) * math.cos(lat2_rad) * math.cos(delta_lon)
-
-        initial_bearing_rad = math.atan2(x, y)
-        initial_bearing_deg = math.degrees(initial_bearing_rad)
-
-        # Normalize to 0-360 degrees
-        return (initial_bearing_deg + 360) % 360
-
-@dataclass
+@dataclass(frozen=True)
 class Route:
-    """Static route definition"""
+    """Static, immutable route definition"""
     name: str
-    points: List[GeoPoint]
-    elevations: List[float]
-    descriptions: List[str]
-    total_distance: Optional[float]
+    points: Tuple[GeoPoint, ...]          # ← tuple, not list
+    elevations: Tuple[float, ...]         # ← tuple
+    descriptions: Tuple[str, ...]         # ← tuple
+    total_distance: Optional[float] = None
 
-    def _point_within_polygon(self, bounds, point: GeoPoint) -> bool:        
-        shapely_point = shapely.Point(point.lon, point.lat)        
-        return shapely_point.within(bounds)
+    def _point_within_polygon(self, polygon: shapely.geometry.Polygon, point: GeoPoint) -> bool:
+        from shapely.geometry import Point
+        shapely_point = Point(point.lon, point.lat)
+        return polygon.contains(shapely_point)
 
-    def is_valid_route(self, bounds : List[float]) -> bool:                
-        within = reduce(lambda count, i: count + self._point_within_polygon(bounds, i), self.points, 0)
-        fraction_within = within / ( (float) (len(self.points)) )                    
-        return fraction_within > 0.5
+    def is_valid_route(self, polygon: shapely.geometry.Polygon) -> bool:
+        if not self.points:
+            return False
+        within_count = sum(
+            1 for point in self.points if self._point_within_polygon(polygon, point)
+        )
+        return (within_count / len(self.points)) > 0.5

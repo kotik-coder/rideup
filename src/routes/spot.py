@@ -1,11 +1,12 @@
 # spot.py
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
+from matplotlib import pyplot as plt
 import osmnx as ox
 from shapely import MultiPolygon, Polygon
 
 # Add imports for route merging
-from src.routes.mutable_route import HierarchicalRouteMerger, RouteSimilarityConfig, EstablishedRoute, create_route_merger
+from src.routes.mutable_route import *
 
 # Assuming these are available in your project structure
 from src.routes.rating_system import RatingSystem
@@ -161,9 +162,71 @@ class Spot:
         # Add established routes as unified routes
         for established_route in self.established_routes:
             unified_route = established_route.get_unified_route(min_confidence=0.5)
-            all_routes.append(unified_route)
+            all_routes.append(unified_route)            
             
         return all_routes
+    
+    @staticmethod
+    def plot_merged_route_with_std(established_route, original_routes=None):
+        """
+        Plot merged route with standard deviation bands and original routes.
+        Assumes established_route.std_devs contains per-point stats.
+        """
+        if not established_route.points:
+            print("No points to plot")
+            return
+            
+        # Extract coordinates
+        lats = [p.lat for p in established_route.points]
+        lons = [p.lon for p in established_route.points]
+        
+        # Extract standard deviations (handle missing data)
+        if hasattr(established_route, 'std_devs') and established_route.std_devs:
+            lat_stds = [s.get('lat_std', 0) for s in established_route.std_devs]
+            lon_stds = [s.get('lon_std', 0) for s in established_route.std_devs]
+        else:
+            lat_stds = [0] * len(lats)
+            lon_stds = [0] * len(lons)
+        
+        # Create plot
+        plt.figure(figsize=(12, 8))
+        
+        # Plot original routes (if provided) - semi-transparent gray
+        if original_routes:
+            for i, route in enumerate(original_routes.values()):
+                orig_lats = [p.lat for p in route.points]
+                orig_lons = [p.lon for p in route.points]
+                alpha = 0.4
+                if len(original_routes) == 1:
+                    plt.plot(orig_lons, orig_lats, 'k--', alpha=alpha, linewidth=1, label=f'Original Route')
+                else:
+                    plt.plot(orig_lons, orig_lats, 'k--', alpha=alpha, linewidth=1, 
+                            label=f'Original Route {i+1}')
+        
+        # Plot main merged route
+        plt.plot(lons, lats, 'b-', linewidth=2.5, label='Merged Route', zorder=5)
+        
+        # Add uncertainty bands (3σ for 99.7% confidence)
+        sigma_multiplier = 1.5
+        plt.fill_between(
+            lons, 
+            [lat - sigma_multiplier * std for lat, std in zip(lats, lat_stds)],
+            [lat + sigma_multiplier * std for lat, std in zip(lats, lat_stds)],
+            color='red', alpha=0.2, label=f'{sigma_multiplier}σ Lat Uncertainty', zorder=4
+        )
+        
+        # Styling
+        plt.xlabel('Longitude')
+        plt.ylabel('Latitude')
+        title_routes = len(original_routes) if original_routes else len(established_route.original_routes)
+        plt.title(f'Merged Route: {established_route.name}\n'
+                f'({len(established_route.points)} points, {title_routes} source routes)')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.axis('equal')
+        
+        plt.tight_layout()
+        plt.show()
         
     def load_valid_routes_and_tracks(self):        
         print_step("SpotLoader", "Loading routes and tracks...")
@@ -189,44 +252,29 @@ class Spot:
 
         # Second pass: merge similar routes into established routes
         if len(valid_routes) > 1:
-            print_step("RouteMerging", "Analyzing route similarities and merging...")
+            print_step("RouteMerging", "Clustering similar routes and merging groups...")
             
-            # Configure route merging
-            config = RouteSimilarityConfig(
-                max_deviation_distance=15.0,
-                min_segment_length=50.0,
-                similarity_threshold=0.7,
-                cluster_epsilon=10.0
-            )
-            
+            config = RouteSimilarityConfig()
             merger = create_route_merger(config)
             merger.build_route_graph(valid_routes)
             established_routes = merger.merge_routes()
+            self.plot_merged_route_with_std(established_routes[0], established_routes[0].original_routes)
             
-            print_step("RouteMerging", f"Created {len(established_routes)} established routes from {len(valid_routes)} original routes")
-            
-            # Replace original routes with established routes where applicable
-            routes_to_keep = []
-            for route in valid_routes:
-                # Check if this route is part of any established route
-                is_merged = False
-                for established_route in established_routes:
-                    if route.name in established_route.original_routes:
-                        is_merged = True
-                        break
-                
-                if not is_merged:
-                    routes_to_keep.append(route)
-            
-            # Add all established routes and standalone routes
-            self.routes = established_routes + routes_to_keep
+            self.routes = [
+                Route(
+                    name=er.name,
+                    points=tuple(er.points),
+                    elevations=tuple(er.elevations),
+                    descriptions=tuple(er.descriptions),
+                    total_distance=er.total_distance
+                )
+                for er in established_routes
+            ]            
             
         else:
             # No merging needed if only one route
-            self.routes = valid_routes
-
-        print_step("SpotLoader", f"Final count: {len(self.routes)} total routes ({len([r for r in self.routes if isinstance(r, EstablishedRoute)])} established + {len([r for r in self.routes if not isinstance(r, EstablishedRoute)])} standalone)")
-
+            self.routes = valid_routes        
+        
         return self.routes
 
     def _get_bounds(self, geostring: str):

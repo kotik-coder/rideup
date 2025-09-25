@@ -2,6 +2,10 @@ import math
 from pathlib import Path
 from typing import List
 from datetime import datetime
+from colorama import init as colorama_init
+
+# Initialize colorama for cross-platform colored output
+colorama_init()
 
 CACHE_FILE = Path("elevation_cache.json")
 REQUEST_DELAY = 1.0  # Задержка между запросами в секундах
@@ -10,12 +14,12 @@ DEBUG = True
 
 TILE_SIZE = 512 # Pixel size of a single map tile. Common values are 256 or 512.
 
-def print_step(prefix : str, message: str, level: str = "INFO"):    
-    if(DEBUG):
+def print_step(prefix: str, message: str, level: str = "INFO"):
+    if DEBUG:
         timestamp = datetime.now().strftime('%H:%M:%S')
         msg = f"[{timestamp}] [{prefix}] [{level}] {message}"
-        if(str == 'ERROR'): 
-            from colorama import Fore, Style            
+        if level == 'ERROR':
+            from colorama import Fore, Style
             msg = Fore.RED + msg + Style.RESET_ALL
         print(msg)
 

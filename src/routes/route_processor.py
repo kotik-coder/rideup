@@ -192,7 +192,7 @@ class ProcessedRoute:
         dlon_dt = create_derivative(lon_interp)
 
         # Initialize distances
-        self.smooth_points[0].distance_from_origin = 0.0
+        self.smooth_points[0].set_distance_from_origin(0.0)
         cumulative_distance = 0.0
 
         t_values = np.linspace(0, 1, len(self.smooth_points))
@@ -211,7 +211,7 @@ class ProcessedRoute:
             )
             
             cumulative_distance += segment_distance
-            self.smooth_points[i].distance_from_origin = cumulative_distance
+            self.smooth_points[i].set_distance_from_origin(cumulative_distance)
             t_prev = t_curr  # Update for next iteration
 
 # route_processor.py (add this method to the RouteProcessor class)

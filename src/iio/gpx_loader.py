@@ -120,9 +120,9 @@ class LocalGPXLoader:
             if current_route_points:
                 route_obj = Route(
                     name=track_gpx.name or gpx_path.stem,
-                    points=current_route_points,
-                    elevations=current_elevations,
-                    descriptions=current_descriptions,
+                    points=tuple(current_route_points),
+                    elevations=tuple(current_elevations),
+                    descriptions=tuple(current_descriptions),
                     total_distance=total_distance  # Set the calculated total distance
                 )
                 
