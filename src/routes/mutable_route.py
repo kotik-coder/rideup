@@ -309,90 +309,95 @@ class HierarchicalRouteMerger:
     def _merge_route_cluster(self, routes: List[Route]) -> Tuple[List[RouteSegment], List[Dict[str, float]]]:
         """Returns (segments, per-point standard deviations)"""
         if len(routes) == 1:
-            route = routes[0]
-            segment = RouteSegment(
-                points=list(route.points),
-                source_route_names={route.name},
-                confidence=1.0
-            )
-            # For single routes, std dev is 0
-            std_devs = [{"lat_std": 0.0, "lon_std": 0.0, "ele_std": 0.0} for _ in route.points]
-            return [segment], std_devs
+            return self._create_single_route_segment(routes[0])
         
-        reference = max(routes, key=lambda r: r.total_distance or 0)
-        all_segments = []
-        all_std_devs = []  # Parallel list to merged points
+        reference = self._select_reference_route(routes)
+        point_groups = self._build_point_groups(reference, routes)        
         
-        # Get alignments
-        all_alignments = []
+        merged_points, std_devs = self._merge_to_reference(reference, point_groups)
+        
+        segment = RouteSegment(
+            points=merged_points,
+            source_route_names={r.name for r in routes},
+            confidence=0.8
+        )
+        
+        return [segment], std_devs
+
+    def _create_single_route_segment(self, route: Route) -> Tuple[List[RouteSegment], List[Dict[str, float]]]:
+        """Create segment for a single route with zero standard deviation."""
+        segment = RouteSegment(
+            points=list(route.points),
+            source_route_names={route.name},
+            confidence=1.0
+        )
+        std_devs = [{"lat_std": 0.0, "lon_std": 0.0, "ele_std": 0.0} for _ in route.points]
+        return [segment], std_devs
+
+    def _select_reference_route(self, routes: List[Route]) -> Route:
+        """Select the longest route as reference backbone."""
+        return max(routes, key=lambda r: r.total_distance or 0)
+
+    def _build_point_groups(self, reference: Route, routes: List[Route]) -> Dict[int, List[GeoPoint]]:
+        """Build groups of aligned points from all routes to the reference."""
+        point_groups = defaultdict(list)
+        
         for other in routes:
             if other is reference:
                 continue
             alignment = self.analyzer.compute_lcss_alignment(reference.points, other.points)
-            all_alignments.append((other, alignment))
-        
-        if not all_alignments:
-            segment = RouteSegment(
-                points=list(reference.points),
-                source_route_names={r.name for r in routes},
-                confidence=0.6
-            )
-            std_devs = [{"lat_std": 0.0, "lon_std": 0.0, "ele_std": 0.0} for _ in reference.points]
-            return [segment], std_devs
-        
-        # Group points by reference index
-        point_groups = defaultdict(list)
-        for other, alignment in all_alignments:
             for i_ref, i_other in alignment:
                 point_groups[i_ref].append(other.points[i_other])
         
-        # Build merged points with stats
-        current_segment_points = []
-        current_segment_std_devs = []
+        return point_groups
+
+    def _merge_to_reference(self, reference: Route, point_groups: Dict[int, List[GeoPoint]]) -> Tuple[List[GeoPoint], List[Dict[str, float]]]:
+        """Build merged route points and standard deviations using median consensus."""
+        merged_points = []
+        std_devs = []
         
         for i_ref, ref_point in enumerate(reference.points):
             matches = point_groups.get(i_ref, [])
             
-            merged_point = ref_point
-            std_dev = { "lat_std" : 0.0,
-                        "lon_std" : 0.0,
-                        "ele_std" : 0.0}
-            
             if matches:
-            
                 total_points = [ref_point] + matches
-                            
-                lats = [p.lat for p in total_points]
-                lons = [p.lon for p in total_points]
-                eles = [p.elevation for p in total_points]
-                
-                avg_lat = sum(lats) / len(lats)
-                avg_lon = sum(lons) / len(lons)
-                avg_ele = sum(eles) / len(eles)
-                
-                # Calculate standard deviations                                                
-                lat_std = (sum((x - avg_lat) ** 2 for x in lats) / len(lats)) ** 0.5
-                lon_std = (sum((x - avg_lon) ** 2 for x in lons) / len(lons)) ** 0.5
-                ele_std = (sum((x - avg_ele) ** 2 for x in eles) / len(eles)) ** 0.5
-                
-                std_dev = { "lat_std" : lat_std,
-                            "lon_std" : lon_std,
-                            "ele_std" : ele_std}
-                
-                merged_point = GeoPoint(avg_lat, avg_lon, avg_ele)
-                
-            current_segment_points.append(merged_point)
-            current_segment_std_devs.append(std_dev)
-                
-        if current_segment_points:
-            all_segments.append(RouteSegment(
-                points=current_segment_points,
-                source_route_names={r.name for r in routes},
-                confidence=0.8
-            ))
-            all_std_devs.extend(current_segment_std_devs)                    
+                merged_point, std_dev = self._compute_median_consensus(total_points)
+            else:
+                merged_point = ref_point
+                std_dev = {"lat_std": 0.0, "lon_std": 0.0, "ele_std": 0.0}
+            
+            merged_points.append(merged_point)
+            std_devs.append(std_dev)
         
-        return all_segments, all_std_devs
+        return merged_points, std_devs
+
+    def _compute_median_consensus(self, points: List[GeoPoint]) -> Tuple[GeoPoint, Dict[str, float]]:
+        """Compute median point and standard deviations from a list of points."""
+        lats = sorted([p.lat for p in points])
+        lons = sorted([p.lon for p in points])
+        eles = sorted([p.elevation for p in points])
+        
+        n = len(lats)
+        if n % 2 == 1:
+            # Odd number of points
+            median_lat = lats[n // 2]
+            median_lon = lons[n // 2]
+            median_ele = eles[n // 2]
+        else:
+            # Even number of points - average the two middle values
+            median_lat = (lats[n // 2 - 1] + lats[n // 2]) / 2
+            median_lon = (lons[n // 2 - 1] + lons[n // 2]) / 2
+            median_ele = (eles[n // 2 - 1] + eles[n // 2]) / 2
+        
+        # Calculate standard deviations for quality metrics
+        lat_std = (sum((x - median_lat) ** 2 for x in lats) / len(lats)) ** 0.5
+        lon_std = (sum((x - median_lon) ** 2 for x in lons) / len(lons)) ** 0.5
+        ele_std = (sum((x - median_ele) ** 2 for x in eles) / len(eles)) ** 0.5
+        
+        merged_point = GeoPoint(median_lat, median_lon, median_ele)
+        std_dev = {"lat_std": lat_std, "lon_std": lon_std, "ele_std": ele_std}
+        
+        return merged_point, std_dev
 
 # Utility function for easy integration
 def create_route_merger(config: Optional[RouteSimilarityConfig] = None) -> HierarchicalRouteMerger:
