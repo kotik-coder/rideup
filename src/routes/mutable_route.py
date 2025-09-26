@@ -1,7 +1,7 @@
 # mutable_route.py
 from collections import defaultdict
 from dataclasses import dataclass, field
-from statistics import median
+from statistics import median, stdev
 from typing import List, Dict, Set, Tuple, Optional
 from enum import Enum
 import numpy as np
@@ -9,6 +9,17 @@ from scipy import stats
 
 from src.routes.route import GeoPoint, Route
 from src.ui.map_helpers import print_step
+
+@dataclass
+class RouteTransition:
+    """Represents a transition segment in the merged route."""
+    start_idx: int
+    start_point: GeoPoint
+    end_idx: int
+    end_point: GeoPoint
+    outlier_count: int
+    consensus_count: int
+    max_residual_ratio: float
 
 class SegmentType(Enum):
     COMMON = "common"
@@ -86,6 +97,7 @@ class RouteSimilarityConfig:
     cluster_epsilon: float = 8.0
     eps = 10.0  # meters — points within 10m are considered "matching"
     lcss_window_size = 50
+    outlier_confidence_level: float = 0.95  # 95% confidence for outlier detection
 
 class RouteSimilarityAnalyzer:
     """Analyzes spatial similarity between routes using LCSS with auto-adjustable distance"""
@@ -315,7 +327,11 @@ class HierarchicalRouteMerger:
         reference = self._select_reference_route(routes)
         point_groups = self._build_point_groups(reference, routes)        
         
-        merged_points, std_devs = self._merge_to_reference(reference, point_groups)
+        # Single pass: compute merged route AND detect transitions
+        merged_points, std_devs, transitions = self._merge_to_reference_with_transitions(reference, point_groups)
+        
+        # Store transitions for Phase 2 (graph construction)
+        self._detected_transitions = transitions
         
         segment = RouteSegment(
             points=merged_points,
@@ -352,45 +368,139 @@ class HierarchicalRouteMerger:
         
         return point_groups
 
-    def _merge_to_reference(self, reference: Route, point_groups: Dict[int, List[GeoPoint]]) -> Tuple[List[GeoPoint], List[Dict[str, float]]]:
-        """Build merged route points and standard deviations using median consensus."""
+    def _merge_to_reference_with_transitions(self, reference: Route, point_groups: Dict[int, List[GeoPoint]]) -> Tuple[
+        List[GeoPoint], 
+        List[Dict[str, float]], 
+        List[RouteTransition]
+    ]:
+        """Single pass that computes merged route AND detects transitions."""
         merged_points = []
         std_devs = []
+        transitions: List[RouteTransition] = []
+        current_transition: Optional[RouteTransition] = None
+        
+        min_transition_length = 3
+        confidence_level = self.analyzer.config.outlier_confidence_level
         
         for i_ref, ref_point in enumerate(reference.points):
             matches = point_groups.get(i_ref, [])
             
             if matches:
                 total_points = [ref_point] + matches
-                merged_point, std_dev = self._compute_median_consensus(total_points)
+                merged_point, std_dev, residuals = self._compute_median_consensus_with_residuals(total_points)
+                outlier_count, consensus_count, max_residual_ratio = self._analyze_outliers(
+                    residuals, std_dev, len(total_points), confidence_level
+                )
+                
+                has_outliers = outlier_count > 0 and outlier_count < len(total_points)
+                
+                if has_outliers:
+                    if current_transition is None:
+                        current_transition = RouteTransition(
+                            start_idx=i_ref,
+                            start_point=ref_point,
+                            end_idx=i_ref,
+                            end_point=ref_point,
+                            outlier_count=outlier_count,
+                            consensus_count=consensus_count,
+                            max_residual_ratio=max_residual_ratio
+                        )
+                    else:
+                        current_transition.end_idx = i_ref
+                        current_transition.end_point = ref_point
+                        current_transition.max_residual_ratio = max(
+                            current_transition.max_residual_ratio, 
+                            max_residual_ratio
+                        )
+                else:
+                    if current_transition:
+                        transition_length = current_transition.end_idx - current_transition.start_idx + 1
+                        if transition_length >= min_transition_length:
+                            transitions.append(current_transition)
+                        current_transition = None
+                
+                merged_points.append(merged_point)
+                std_devs.append(std_dev)
             else:
-                merged_point = ref_point
-                std_dev = {"lat_std": 0.0, "lon_std": 0.0, "ele_std": 0.0}
-            
-            merged_points.append(merged_point)
-            std_devs.append(std_dev)
+                if current_transition:
+                    transition_length = current_transition.end_idx - current_transition.start_idx + 1
+                    if transition_length >= min_transition_length:
+                        transitions.append(current_transition)
+                    current_transition = None
+                
+                merged_points.append(ref_point)
+                std_devs.append({"lat_std": 0.0, "lon_std": 0.0, "ele_std": 0.0})
         
-        return merged_points, std_devs
+        if current_transition:
+            transition_length = current_transition.end_idx - current_transition.start_idx + 1
+            if transition_length >= min_transition_length:
+                transitions.append(current_transition)
+        
+        return merged_points, std_devs, transitions
 
-    def _compute_median_consensus(self, points: List[GeoPoint]) -> Tuple[GeoPoint, Dict[str, float]]:
-        """Compute median point and standard deviations from a list of points."""
-        lats = sorted([p.lat for p in points])
-        lons = sorted([p.lon for p in points])
-        eles = sorted([p.elevation for p in points])
+    def _compute_median_consensus_with_residuals(self, points: List[GeoPoint]) -> Tuple[GeoPoint, Dict[str, float], List[Tuple[float, float]]]:
+        """Compute median point, standard deviations, and residuals using standard library."""
+        lats = [p.lat for p in points]
+        lons = [p.lon for p in points]
+        eles = [p.elevation for p in points]
         
+        # Use statistics.median for robustness
         median_lat = median(lats)
         median_lon = median(lons)
         median_ele = median(eles)
         
-        # Calculate standard deviations for quality metrics
-        lat_std = (sum((x - median_lat) ** 2 for x in lats) / len(lats)) ** 0.5
-        lon_std = (sum((x - median_lon) ** 2 for x in lons) / len(lons)) ** 0.5
-        ele_std = (sum((x - median_ele) ** 2 for x in eles) / len(eles)) ** 0.5
+        lat_std = stdev(lats) if len(lats) > 1 else 0.0
+        lon_std = stdev(lons) if len(lons) > 1 else 0.0
+        ele_std = stdev(eles) if len(eles) > 1 else 0.0
+        
+        # Calculate residuals for statistical testing
+        lat_residuals = [abs(p.lat - median_lat) for p in points]
+        lon_residuals = [abs(p.lon - median_lon) for p in points]
+        residuals = list(zip(lat_residuals, lon_residuals))
         
         merged_point = GeoPoint(median_lat, median_lon, median_ele)
         std_dev = {"lat_std": lat_std, "lon_std": lon_std, "ele_std": ele_std}
         
-        return merged_point, std_dev
+        return merged_point, std_dev, residuals
+    
+    def _analyze_outliers(self, residuals: List[Tuple[float, float]], std_dev: Dict[str, float], n_points: int, confidence_level: float = 0.95) -> Tuple[int, int, float]:
+        """
+        Analyze residuals using Student's t-distribution.
+        Returns (outlier_count, consensus_count, max_residual_ratio)
+        """
+        if n_points < 3:
+            return 0, n_points, 0.0
+        
+        df = n_points - 1
+        alpha = 1.0 - confidence_level
+        t_critical = stats.t.ppf(1 - alpha/2, df)
+        
+        max_lat_residual_allowed = t_critical * std_dev['lat_std']
+        max_lon_residual_allowed = t_critical * std_dev['lon_std']
+        
+        outlier_count = 0
+        max_residual_ratio = 0.0
+        
+        for lat_res, lon_res in residuals:
+            if std_dev['lat_std'] > 0:
+                lat_ratio = lat_res / max_lat_residual_allowed
+            else:
+                lat_ratio = 0.0 if lat_res == 0 else float('inf')
+                
+            if std_dev['lon_std'] > 0:
+                lon_ratio = lon_res / max_lon_residual_allowed
+            else:
+                lon_ratio = 0.0 if lon_res == 0 else float('inf')
+                
+            max_ratio = max(lat_ratio, lon_ratio)
+            
+            if max_ratio > 1.0:
+                outlier_count += 1
+            
+            max_residual_ratio = max(max_residual_ratio, max_ratio)
+        
+        consensus_count = n_points - outlier_count
+        return outlier_count, consensus_count, max_residual_ratio        
 
 # Utility function for easy integration
 def create_route_merger(config: Optional[RouteSimilarityConfig] = None) -> HierarchicalRouteMerger:
