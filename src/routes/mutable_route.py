@@ -1,6 +1,7 @@
 # mutable_route.py
 from collections import defaultdict
 from dataclasses import dataclass, field
+from statistics import median
 from typing import List, Dict, Set, Tuple, Optional
 from enum import Enum
 import numpy as np
@@ -377,17 +378,9 @@ class HierarchicalRouteMerger:
         lons = sorted([p.lon for p in points])
         eles = sorted([p.elevation for p in points])
         
-        n = len(lats)
-        if n % 2 == 1:
-            # Odd number of points
-            median_lat = lats[n // 2]
-            median_lon = lons[n // 2]
-            median_ele = eles[n // 2]
-        else:
-            # Even number of points - average the two middle values
-            median_lat = (lats[n // 2 - 1] + lats[n // 2]) / 2
-            median_lon = (lons[n // 2 - 1] + lons[n // 2]) / 2
-            median_ele = (eles[n // 2 - 1] + eles[n // 2]) / 2
+        median_lat = median(lats)
+        median_lon = median(lons)
+        median_ele = median(eles)
         
         # Calculate standard deviations for quality metrics
         lat_std = (sum((x - median_lat) ** 2 for x in lats) / len(lats)) ** 0.5
